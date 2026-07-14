@@ -1,0 +1,45 @@
+# Python and test tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+config.json
+config.local.json
+secrets/
+*.pem
+*.key
+service-account*.json
+
+# Persistent application state (keep outside the repository)
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+state/
+data/
+.qasawatch/
+chrome-profile/
+chrome.json
+profile.supervisor.lock
+
+# Generated artifacts and operator captures
+output/
+outputs/
+backups/
+screenshots/
+playwright-report/
+.playwright-cli/
+test-results/

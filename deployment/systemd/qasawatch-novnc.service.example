@@ -1,0 +1,21 @@
+# Optional noVNC bridge. Package paths differ by distribution; adjust --web.
+# It binds to 127.0.0.1 only and is NOT a TLS or authentication boundary.
+[Unit]
+Description=QasaWatch loopback-only noVNC bridge
+After=qasawatch-x11vnc.service
+Requires=qasawatch-x11vnc.service
+
+[Service]
+Type=simple
+User=qasawatch
+Group=qasawatch
+ExecStart=/usr/bin/websockify --web=/usr/share/novnc 127.0.0.1:6080 127.0.0.1:5900
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

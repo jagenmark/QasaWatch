@@ -1,0 +1,24 @@
+# Optional VNC bridge. Generate /etc/qasawatch/x11vnc.pass with `x11vnc -storepasswd`
+# as the qasawatch account, set mode 0600, and never bind it to a public address.
+[Unit]
+Description=QasaWatch loopback-only VNC bridge
+After=qasawatch-browser-view.service
+Requires=qasawatch-browser-view.service
+
+[Service]
+Type=simple
+User=qasawatch
+Group=qasawatch
+Environment=DISPLAY=:99
+ExecStart=/usr/bin/x11vnc -display :99 -localhost -forever -shared -rfbauth /etc/qasawatch/x11vnc.pass
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=false
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/etc/qasawatch
+ReadWritePaths=/var/lib/qasawatch
+
+[Install]
+WantedBy=multi-user.target

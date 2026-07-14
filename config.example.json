@@ -1,0 +1,78 @@
+{
+  "enabled": false,
+  "safe_mode": true,
+  "qasa_results_url": "https://qasa.com/se/sv/find-home?ne_lat=59.395990187569225&ne_lng=18.166765064212683&sw_lat=59.29144514172344&sw_lng=17.958198610912206&maxRoomCount=3&maxMonthlyCost=10300&minSquareMeters=25&minRentalLength=15778476&sharedHome=privateHome",
+  "base_interval_minutes": 15,
+  "jitter_minutes": 3,
+  "destinations": [
+    {
+      "label": "Office",
+      "address": "Examplegatan 1, 111 22 Stockholm",
+      "commute_mode": "arrival",
+      "maximum_commute_minutes": 45
+    },
+    {
+      "label": "School",
+      "address": "Exempelvagen 2, 114 34 Stockholm",
+      "commute_mode": "departure",
+      "maximum_commute_minutes": 45
+    }
+  ],
+  "filters": {
+    "minimum_rent": 8000,
+    "maximum_rent": 18000,
+    "minimum_rooms": 1,
+    "maximum_rooms": 4,
+    "minimum_area": 25,
+    "maximum_area": null,
+    "maximum_commute_minutes": 45,
+    "allowed_locations": ["Stockholm"],
+    "excluded_locations": [],
+    "required_keywords": [],
+    "excluded_keywords": [],
+    "availability_from": null,
+    "availability_to": null,
+    "minimum_population": null,
+    "maximum_population": null,
+    "maximum_average_age": null
+  },
+  "sheets": {
+    "enabled": false,
+    "spreadsheet_id": "replace-with-google-sheet-id",
+    "worksheet": "Listings",
+    "credentials_secret_ref": "env:QASAWATCH_GOOGLE_SERVICE_ACCOUNT_JSON"
+  },
+  "discord": {
+    "enabled": false,
+    "webhook_secret_ref": "env:QASAWATCH_DISCORD_WEBHOOK_URL"
+  },
+  "email": {
+    "enabled": false,
+    "recipients": ["operator@example.invalid"],
+    "sender": "qasawatch@example.invalid",
+    "smtp_mode": "starttls",
+    "smtp_host": "smtp.example.invalid",
+    "smtp_port": 587,
+    "smtp_username": "qasawatch@example.invalid",
+    "smtp_secret_ref": "env:QASAWATCH_SMTP_PASSWORD",
+    "grouped": true,
+    "per_listing": false,
+    "send_no_new": false,
+    "subject": "QasaWatch: {count} new listings"
+  },
+  "scb": {
+    "data_path": "/var/lib/qasawatch/scb/scb-areas.geojson",
+    "municipality_mapping": {
+      "Stockholm": "0180"
+    },
+    "id_column": "municipality_id",
+    "name_column": "municipality_name",
+    "demographic_mapping": {
+      "population": "population",
+      "average_age": "average_age"
+    },
+    "vintage": "2025",
+    "crs": "EPSG:4326"
+  },
+  "maps_api_secret_ref": "env:QASAWATCH_GOOGLE_MAPS_API_KEY"
+}

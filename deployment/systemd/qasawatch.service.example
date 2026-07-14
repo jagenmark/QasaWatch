@@ -1,0 +1,34 @@
+# Starts the packaged local dashboard/scheduler on loopback.
+# The packaged CLI wires configured Maps, SCB, Sheets, Discord, and SMTP
+# providers. Keep safe_mode enabled until credentials and destinations are tested.
+[Unit]
+Description=QasaWatch operator dashboard and scheduler
+After=network-online.target qasawatch-browser-view.service
+Wants=network-online.target
+Requires=qasawatch-browser-view.service
+
+[Service]
+Type=simple
+User=qasawatch
+Group=qasawatch
+WorkingDirectory=/opt/qasawatch
+EnvironmentFile=/etc/qasawatch/qasawatch.env
+Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=:99
+ExecStart=/opt/qasawatch/.venv/bin/qasawatch --database /var/lib/qasawatch/qasawatch.db --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+# Preserve the separately supervised Chrome child across app stop/restart so
+# the next app process can adopt the same profile/session. A VM shutdown still
+# terminates Chrome; profile state remains on disk.
+KillMode=process
+NoNewPrivileges=yes
+# Share /tmp with the Xvfb unit so Chrome can reach /tmp/.X11-unix/X99.
+PrivateTmp=false
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/qasawatch
+
+[Install]
+WantedBy=multi-user.target

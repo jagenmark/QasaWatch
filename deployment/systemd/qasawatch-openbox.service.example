@@ -1,0 +1,22 @@
+# Optional lightweight window manager for the private :99 X display.
+[Unit]
+Description=QasaWatch private Openbox window manager
+After=qasawatch-browser-view.service
+Requires=qasawatch-browser-view.service
+
+[Service]
+Type=simple
+User=qasawatch
+Group=qasawatch
+Environment=DISPLAY=:99
+ExecStart=/usr/bin/openbox-session
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=false
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/qasawatch
+
+[Install]
+WantedBy=multi-user.target

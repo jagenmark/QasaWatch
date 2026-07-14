@@ -1,0 +1,24 @@
+# Private X display for manual login/CAPTCHA recovery only. The main service
+# depends on it by default; remove that dependency/DISPLAY if running elsewhere.
+# Bind VNC/noVNC to localhost; use SSH/VPN/TLS outside those units.
+[Unit]
+Description=QasaWatch private X11 browser-view stack
+After=network.target
+
+[Service]
+Type=simple
+User=qasawatch
+Group=qasawatch
+Environment=DISPLAY=:99
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1440x900x24 -nolisten tcp
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+# The X socket must be visible to the QasaWatch/WM/VNC service units.
+PrivateTmp=false
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/qasawatch
+
+[Install]
+WantedBy=multi-user.target
