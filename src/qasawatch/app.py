@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -57,7 +58,9 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
 
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request):
-        return TEMPLATES.TemplateResponse(request, "dashboard.html", await service.dashboard())
+        state = await service.dashboard()
+        state["config_error"] = request.query_params.get("config_error")
+        return TEMPLATES.TemplateResponse(request, "dashboard.html", state)
 
     @app.get("/api/status")
     async def api_status():
@@ -87,6 +90,14 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
         sheets_credentials_secret_ref: str = Form(""),
         discord_webhook_secret_ref: str = Form(""),
         smtp_secret_ref: str = Form(""),
+        destination_1_label: str | None = Form(None),
+        destination_1_address: str | None = Form(None),
+        destination_1_mode: str | None = Form(None),
+        destination_1_maximum: str | None = Form(None),
+        destination_2_label: str | None = Form(None),
+        destination_2_address: str | None = Form(None),
+        destination_2_mode: str | None = Form(None),
+        destination_2_maximum: str | None = Form(None),
         attribute_furnished: str | None = Form(None),
         attribute_shared: str | None = Form(None),
         attribute_pets_allowed: str | None = Form(None),
@@ -110,6 +121,28 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
                 discord["webhook_secret_ref"] = discord_webhook_secret_ref.strip()
             if smtp_secret_ref.strip():
                 email["smtp_secret_ref"] = smtp_secret_ref.strip()
+            destination_controls = (
+                (destination_1_label, destination_1_address, destination_1_mode, destination_1_maximum),
+                (destination_2_label, destination_2_address, destination_2_mode, destination_2_maximum),
+            )
+            if any(value is not None for row in destination_controls for value in row):
+                destinations = []
+                for index, (label, address, mode, maximum) in enumerate(destination_controls, 1):
+                    label = (label or "").strip()
+                    address = (address or "").strip()
+                    maximum = (maximum or "").strip()
+                    if not address:
+                        if label or maximum:
+                            raise ValueError(f"Destination {index} needs an address")
+                        continue
+                    destinations.append({
+                        "label": label or f"Destination {index}",
+                        "address": address,
+                        "commute_mode": (mode or "arrival").strip().lower(),
+                        "maximum_commute_minutes": int(maximum) if maximum else None,
+                    })
+            else:
+                destinations = json.loads(destinations_json)
             filters = json.loads(filters_json)
             if not isinstance(filters, dict):
                 raise ValueError("filters_json must contain a JSON object")
@@ -140,7 +173,7 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
             config = WatcherConfig(
                 enabled=enabled, qasa_results_url=qasa_results_url,
                 base_interval_minutes=base_interval_minutes, jitter_minutes=jitter_minutes,
-                destinations=json.loads(destinations_json), filters=filters,
+                destinations=destinations, filters=filters,
                 sheets=sheets, discord=discord, email=email, scb=json.loads(scb_json), safe_mode=safe_mode,
                 maps_api_secret_ref=(
                     maps_api_secret_ref.strip()
@@ -148,7 +181,19 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
                 ),
             )
         except (ValueError, json.JSONDecodeError, ValidationError) as exc:
-            raise HTTPException(422, str(exc)) from exc
+            if isinstance(exc, ValidationError):
+                message = "; ".join(
+                    f"{'.'.join(map(str, error['loc']))}: {error['msg']}"
+                    for error in exc.errors()
+                )
+            elif isinstance(exc, json.JSONDecodeError):
+                message = "One of the advanced JSON fields is invalid"
+            else:
+                message = str(exc)
+            return RedirectResponse(
+                f"/?config_error={quote('Configuration was not saved: ' + message)}",
+                status_code=303,
+            )
         await service.save_config(config)
         return RedirectResponse("/", status_code=303)
 

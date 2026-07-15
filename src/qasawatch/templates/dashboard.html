@@ -7,10 +7,18 @@
 <section><h2>Manual listing review</h2><p>Processes the detail page without watcher dedup, output, or statistics. Promotion is a separate review action.</p><form method="post" action="/manual"><input name="url" type="url" required placeholder="https://qasa.com/.../home/..."><button>Inspect</button></form>
 {% if manual_error %}<p class="error">{{ manual_error }}</p>{% endif %}
 {% if manual_result %}<article><h3>{{ 'Promoted' if manual_promoted else ('Would pass' if manual_result.accepted else 'Would be rejected') }}</h3><p>Stage: {{ manual_result.stage }}</p><pre>{{ manual_result.data | tojson(indent=2) }}</pre>{% if manual_result.rejection_reasons %}<pre>{{ manual_result.rejection_reasons | tojson(indent=2) }}</pre>{% endif %}{% if not manual_promoted %}<form method="post" action="/manual/promote"><input type="hidden" name="manual_id" value="{{ manual_id }}"><label><input type="checkbox" name="sheets"> Sheets</label><label><input type="checkbox" name="discord"> Discord</label><label><input type="checkbox" name="email"> Email</label><button>Explicitly promote</button></form>{% endif %}</article>{% endif %}</section>
-<section><h2>Configuration</h2><form method="post" action="/config" class="grid">
+<section><h2>Configuration</h2>{% if config_error %}<p class="error error-box">{{ config_error }}</p>{% endif %}<form method="post" action="/config" class="grid">
 <label><input type="checkbox" name="enabled" {% if config.enabled %}checked{% endif %}> Enabled</label><label><input type="checkbox" name="safe_mode" {% if config.safe_mode %}checked{% endif %}> Safe verification mode</label>
 <label>Exact Qasa results URL<input name="qasa_results_url" value="{{ config.qasa_results_url }}" required></label><label>Base interval<input name="base_interval_minutes" type="number" value="{{ config.base_interval_minutes }}"></label><label>Jitter<input name="jitter_minutes" type="number" value="{{ config.jitter_minutes }}"></label>
-<label>Destinations JSON (at least two when enabled)<textarea name="destinations_json">{{ config.destinations | tojson }}</textarea></label><label>Filters JSON<textarea name="filters_json">{{ config.filters | tojson }}</textarea></label>
+<input type="hidden" name="destinations_json" value="{{ config.destinations | tojson | forceescape }}">
+{% for number in [1, 2] %}{% set destination = config.destinations[number - 1] if config.destinations|length >= number else {} %}
+<fieldset class="destination-card"><legend>Commute destination {{ number }}</legend>
+<label>Name<input name="destination_{{ number }}_label" value="{{ destination.get('label', '') }}" placeholder="{{ 'Enköping' if number == 1 else 'T-Centralen' }}"></label>
+<label>Address or station<input name="destination_{{ number }}_address" value="{{ destination.get('address', '') }}" placeholder="{{ 'Enköping centralstation' if number == 1 else 'T-Centralen, Stockholm' }}"></label>
+<label>08:00 means<select name="destination_{{ number }}_mode"><option value="arrival"{% if destination.get('commute_mode', 'arrival') == 'arrival' %} selected{% endif %}>Arrive by 08:00</option><option value="departure"{% if destination.get('commute_mode') == 'departure' %} selected{% endif %}>Depart at 08:00</option></select></label>
+<label>Maximum commute (minutes, optional)<input name="destination_{{ number }}_maximum" type="number" min="1" value="{{ destination.get('maximum_commute_minutes') or '' }}"></label>
+</fieldset>{% endfor %}
+<label>Filters JSON (advanced)<textarea name="filters_json">{{ config.filters | tojson }}</textarea></label>
 {% set attributes = config.filters.attribute_requirements %}
 <fieldset><legend>Listing attributes</legend><p>Choose whether each listing attribute is ignored, required, or forbidden.</p>
 {% for key, label in [('furnished', 'Furnished'), ('shared', 'Shared home'), ('pets_allowed', 'Pets allowed'), ('smoking_allowed', 'Smoking allowed'), ('wheelchair_accessible', 'Wheelchair accessible'), ('first_hand', 'First-hand contract'), ('student_home', 'Student home'), ('senior_home', 'Senior home'), ('instant_sign', 'Instant sign'), ('corporate_home', 'Corporate home')] %}

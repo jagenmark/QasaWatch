@@ -16,6 +16,8 @@
 
 Each watcher scan opens one temporary tab for the configured rendered results page, captures its first-party HomeSearch response, parses only actual `HomeDocument` listings, and closes the tab. It does not open every listing. Manual URL inspection still renders the submitted detail page. Commutes use the next strict future weekday at 08:00 in `Europe/Stockholm`. Arrival destinations get an 08:00 arrival time; departure destinations get an 08:00 departure time.
 
+The dashboard provides two ordinary destination forms; enter station/address text directly. JSON is required only when using `PUT /api/config`, not for the dashboard form. Configuration errors return to the dashboard with a readable message and do not overwrite the last valid settings.
+
 `filters.attribute_requirements` maps a supported boolean attribute to `true` or `false`. The dashboard exposes Ignore / Require yes / Require no controls for furnished, shared, pets, smoking, wheelchair access, first-hand, student/senior, instant-sign, and corporate homes. An enabled requirement rejects a missing value and records an explicit reason.
 
 ## Google Maps

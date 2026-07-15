@@ -90,3 +90,60 @@ async def test_config_form_persists_false_and_removes_ignored_attribute(tmp_path
     assert saved.filters.minimum_rent == 5000
     assert saved.filters.attribute_requirements == {"furnished": False}
     await db.dispose()
+
+
+async def test_config_form_saves_two_plain_destination_controls(tmp_path):
+    db = Database(tmp_path / "destination-form.db")
+    await db.initialize()
+    service = AppService(db, NoBrowser(), Pipeline(db))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service)), base_url="http://test"
+    ) as client:
+        response = await client.post("/config", data={
+            "enabled": "true",
+            "safe_mode": "true",
+            "qasa_results_url": "https://qasa.com/se/sv/find-home",
+            "destination_1_label": "Enköping",
+            "destination_1_address": "Enköping centralstation",
+            "destination_1_mode": "arrival",
+            "destination_1_maximum": "75",
+            "destination_2_label": "T-Centralen",
+            "destination_2_address": "T-Centralen, Stockholm",
+            "destination_2_mode": "departure",
+            "destination_2_maximum": "45",
+        })
+
+    assert response.status_code == 303
+    saved = await service.get_config()
+    assert saved.enabled
+    assert [item.address for item in saved.destinations] == [
+        "Enköping centralstation",
+        "T-Centralen, Stockholm",
+    ]
+    assert saved.destinations[0].commute_mode == "arrival"
+    assert saved.destinations[1].commute_mode == "departure"
+    assert saved.destinations[0].maximum_commute_minutes == 75
+    await db.dispose()
+
+
+async def test_invalid_advanced_json_returns_readable_dashboard_error(tmp_path):
+    db = Database(tmp_path / "config-error.db")
+    await db.initialize()
+    service = AppService(db, NoBrowser(), Pipeline(db))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service)),
+        base_url="http://test",
+        follow_redirects=True,
+    ) as client:
+        response = await client.post("/config", data={
+            "qasa_results_url": "https://qasa.com/se/sv/find-home",
+            "filters_json": "[not JSON",
+        })
+
+    assert response.status_code == 200
+    assert "Configuration was not saved" in response.text
+    assert "advanced JSON" in response.text
+    assert (await service.get_config()).qasa_results_url == "https://qasa.com/se/sv/find-home"
+    await db.dispose()
