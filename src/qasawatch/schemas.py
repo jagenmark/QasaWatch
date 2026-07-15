@@ -10,6 +10,20 @@ from .browser import validate_qasa_url
 from .secrets import SecretRef
 
 
+ListingAttribute = Literal[
+    "furnished",
+    "shared",
+    "pets_allowed",
+    "smoking_allowed",
+    "wheelchair_accessible",
+    "first_hand",
+    "student_home",
+    "senior_home",
+    "instant_sign",
+    "corporate_home",
+]
+
+
 def _secret_reference(value: str | None) -> str | None:
     if value is not None:
         SecretRef.parse(value)
@@ -40,6 +54,7 @@ class FilterSettings(BaseModel):
     minimum_population: int | None = Field(None, ge=0)
     maximum_population: int | None = Field(None, ge=0)
     maximum_average_age: float | None = Field(None, ge=0)
+    attribute_requirements: dict[ListingAttribute, bool] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def ordered_ranges(self) -> "FilterSettings":

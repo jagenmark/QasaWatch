@@ -11,7 +11,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from .app import create_app
-from .browser import QasaBrowser, QasaDetailEnricher
+from .browser import QasaBrowser
 from .browser_host import ChromeHost
 from .config import BootstrapSettings, ConfigStore
 from .db import Database
@@ -52,7 +52,16 @@ class _WebhookClient:
     async def post(self, url, payload, *, headers=None):
         def send():
             url_with_wait = url + ("&" if "?" in url else "?") + "wait=true"
-            request = Request(url_with_wait, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json", **(headers or {})}, method="POST")
+            request = Request(
+                url_with_wait,
+                data=json.dumps(payload).encode(),
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "QasaWatch/2.0 (+https://github.com/jagenmark/QasaWatch)",
+                    **(headers or {}),
+                },
+                method="POST",
+            )
             try:
                 with urlopen(request, timeout=20) as response:
                     raw = response.read()
@@ -88,6 +97,20 @@ def _filters(settings, destinations=()) -> FilterChain:
         rules.append(PredicateFilter("availability_from", lambda item: str(item.data.get("rental_start", "")) >= settings.availability_from, "availability.too_early", "listing starts before the configured date"))
     if settings.availability_to:
         rules.append(PredicateFilter("availability_to", lambda item: str(item.data.get("rental_start", "")) <= settings.availability_to, "availability.too_late", "listing starts after the configured date"))
+    for attribute, expected in settings.attribute_requirements.items():
+        def attribute_matches(item, attribute=attribute, expected=expected):
+            value = item.data.get(attribute)
+            return isinstance(value, bool) and value is expected
+
+        expectation = "yes" if expected else "no"
+        rules.append(
+            PredicateFilter(
+                f"attribute_{attribute}",
+                attribute_matches,
+                f"attribute.{attribute}.required_{str(expected).lower()}",
+                f"{attribute.replace('_', ' ')} must be {expectation}; the value is missing or does not match",
+            )
+        )
     if settings.maximum_commute_minutes is not None:
         rules.append(PredicateFilter("maximum_commute", lambda item: bool(item.data.get("commutes")) and all(value.get("duration_seconds") is not None and value["duration_seconds"] <= settings.maximum_commute_minutes * 60 for value in item.data["commutes"].values()), "commute.too_long_or_missing", "one or more commutes exceed the configured limit or are unavailable"))
     for destination in destinations:
@@ -122,14 +145,16 @@ def build_application(database_path: str | None = None):
     database = Database(database_path or settings.database)
     state_dir = Path(database_path or settings.database).expanduser().resolve().parent / ".qasawatch"
     browser = QasaBrowser(ChromeHost(state_dir))
-    detail = QasaDetailEnricher(browser)
     dataset_cache: dict[tuple, object] = {}
     maps_client_cache: dict[str, tuple[GoogleGeocoder, GoogleRoutesMatrix]] = {}
     commute_cache: dict[tuple, CommuteEnricher] = {}
     def pipeline_factory(config):
-        enrichers = [detail]
+        # The rendered results page's HomeSearch data is the watcher's source
+        # of truth. Manual inspection separately opens one submitted detail URL;
+        # watcher listings must not fan out into one browser navigation each.
+        enrichers = []
         enrichment_config = {
-            "version": 1,
+            "version": 2,
             "destinations": [item.model_dump(mode="json") for item in config.destinations],
             "maps_reference": config.maps_api_secret_ref,
             "scb": config.scb.model_dump(mode="json"),
@@ -240,7 +265,7 @@ def build_application(database_path: str | None = None):
                 subject_template=provider.subject_template,
             )
         return dict((await provider.send_test()).details)
-    service = AppService(database, browser, Pipeline(database, enricher=detail), config_store=store, pipeline_factory=pipeline_factory, email_tester=email_tester)
+    service = AppService(database, browser, Pipeline(database), config_store=store, pipeline_factory=pipeline_factory, email_tester=email_tester)
     return create_app(service, start_scheduler=True)
 
 

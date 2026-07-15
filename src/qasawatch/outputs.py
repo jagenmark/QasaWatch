@@ -30,6 +30,13 @@ def listing_summary(listing: ListingSnapshot) -> dict[str, str]:
     """Stable, presentation-ready fields shared by all output channels."""
 
     data = listing.data
+    def number(value: Any) -> str:
+        return str(int(value)) if isinstance(value, float) and value.is_integer() else str(value)
+
+    def date_only(value: Any) -> str:
+        text = str(value)
+        return text[:10] if len(text) >= 10 and text[4:5] == "-" and text[7:8] == "-" else text
+
     commute_values = data.get("commutes") or ({"destination": data["commute"]} if isinstance(data.get("commute"), Mapping) else {})
     commute = "; ".join(
         f"{name}: {round(value['duration_seconds'] / 60)} min" if isinstance(value, Mapping) and value.get("duration_seconds") is not None else f"{name}: {value.get('status', 'unknown') if isinstance(value, Mapping) else 'unknown'}"
@@ -43,15 +50,15 @@ def listing_summary(listing: ListingSnapshot) -> dict[str, str]:
     return {
         "title": str(data.get("title") or data.get("address") or f"Listing {listing.id}"),
         "address": str(data.get("address") or ""),
-        "rent": str(data.get("rent", data.get("monthly_rent", ""))),
-        "rooms": str(data.get("rooms", "")),
-        "area": str(data.get("area", "")),
+        "rent": number(data.get("rent", data.get("monthly_rent", ""))),
+        "rooms": number(data.get("rooms", "")),
+        "area": number(data.get("area", "")),
         "coordinates": ", ".join(
             str(data.get(key)) for key in ("latitude", "longitude")
             if data.get(key) is not None
         ),
         "rental_period": " → ".join(
-            str(data.get(key)) for key in ("rental_start", "rental_end")
+            date_only(data.get(key)) for key in ("rental_start", "rental_end")
             if data.get(key)
         ),
         "duration": str(data.get("duration", "")),
@@ -220,16 +227,66 @@ class DiscordWebhookOutput:
     def __repr__(self) -> str:
         return f"{type(self).__name__}(webhook_url=<redacted>)"
 
-    async def deliver(self, listing: ListingSnapshot, *, idempotency_key: str) -> DeliveryResult:
+    @staticmethod
+    def _content(listing: ListingSnapshot) -> str:
         summary = listing_summary(listing)
-        content = f"**{summary['title'][:120]}**"
-        if summary["rent"]:
-            content += f" — {summary['rent']}"
-        details = [value for value in (summary["published"] and f"Published {summary['published']}", summary["commute"], summary["demographics"], f"Filter: {summary['filter']}") if value]
-        if details:
-            content += "\n" + " · ".join(details)
-        content += f"\n{summary['url']}"
-        payload = {"content": content[:1900], "allowed_mentions": {"parse": []}}
+        data = listing.data
+        lines = ["**NY QASA-ANNONS**", summary["url"], ""]
+
+        for label, value in (
+            ("Hyra", f'{summary["rent"]} kr' if summary["rent"] else ""),
+            ("Kvm", f'{summary["area"]} m²' if summary["area"] else ""),
+            ("Plats/adress", summary["address"]),
+            ("Rum", summary["rooms"]),
+        ):
+            if value:
+                lines.append(f"{label}: {value}")
+
+        rental_period = summary["rental_period"]
+        if data.get("rental_start") and not data.get("rental_end"):
+            rental_period = f"{summary['rental_period']} - Tillsvidare"
+        if rental_period:
+            lines.append(f"Uthyrningsperiod: {rental_period}")
+
+        commutes = data.get("commutes")
+        if not isinstance(commutes, Mapping) and isinstance(data.get("commute"), Mapping):
+            commutes = {"destination": data["commute"]}
+        commute_lines: list[str] = []
+        if isinstance(commutes, Mapping):
+            for name, value in commutes.items():
+                if isinstance(value, Mapping) and value.get("duration_seconds") is not None:
+                    detail = f"{round(value['duration_seconds'] / 60)} min"
+                elif isinstance(value, Mapping) and value.get("status"):
+                    detail = str(value["status"])
+                elif value not in (None, "") and not isinstance(value, Mapping):
+                    detail = str(value)
+                else:
+                    detail = "unknown"
+                commute_lines.append(f"- {name}: {detail}")
+        if commute_lines:
+            lines.extend(("", "Pendling:", *commute_lines))
+
+        demographics = data.get("demographics") or data.get("scb")
+        demographic_lines: list[str] = []
+        if isinstance(demographics, Mapping):
+            demographic_lines = [
+                f"- {name}: {value}"
+                for name, value in demographics.items()
+                if value not in (None, "")
+            ]
+        elif demographics not in (None, ""):
+            demographic_lines = [f"- {demographics}"]
+        if demographic_lines:
+            lines.extend(("", "Brown Watch / Demographics:", *demographic_lines))
+
+        content = "\n".join(lines)
+        return content if len(content) <= 1900 else content[:1899] + "…"
+
+    async def deliver(self, listing: ListingSnapshot, *, idempotency_key: str) -> DeliveryResult:
+        payload = {
+            "content": self._content(listing),
+            "allowed_mentions": {"parse": []},
+        }
         try:
             response = await self.client.post(self._webhook_url, payload, headers={"Idempotency-Key": idempotency_key})
         except Exception as exc:

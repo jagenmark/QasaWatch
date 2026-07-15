@@ -149,7 +149,13 @@ def _candidate(mapping: Mapping[str, Any], base_url: str, source: str) -> Parsed
     kind = str(_first(mapping, "@type", "type", "__typename") or "").lower()
     if not raw_url and not raw_id:
         return None
-    listing_kind = any(word in kind for word in ("offer", "accommodation", "listing", "home"))
+    # Qasa nests HomeDocumentLocationType and HomeDocumentUploadType objects
+    # below each actual HomeDocument.  Those children also have numeric IDs,
+    # so a broad ``"home" in __typename`` check creates phantom listings.
+    listing_kind = (
+        any(word in kind for word in ("offer", "accommodation", "listing"))
+        or kind in {"home", "homedocument", "apartment", "house", "residence"}
+    )
     listing_fields = any(_first(mapping, key) is not None for key in
                          ("monthlyRent", "monthlyCost", "roomCount", "squareMeters", "listingId", "homeId"))
     if not raw_url and not listing_kind and not listing_fields:
@@ -173,13 +179,15 @@ def _candidate(mapping: Mapping[str, Any], base_url: str, source: str) -> Parsed
     listing = ParsedListing(url=url, external_id=external_id)
     aliases = {
         "address": ("address", "streetAddress", "name", "title"),
-        "rent": ("rent", "monthlyRent", "monthlyCost", "price"),
+        # Qasa's monthlyCost includes its service fee and is the actual amount
+        # shown to the tenant; retain the lower base rent separately below.
+        "rent": ("monthlyCost", "monthlyRent", "price", "rent"),
         "rooms": ("rooms", "roomCount", "numberOfRooms"),
         "area": ("area", "squareMeters", "floorSize"),
         "availability": ("availability", "status"),
         "rental_start": ("rentalStart", "availableFrom", "startDate"),
         "rental_end": ("rentalEnd", "availableTo", "endDate"),
-        "duration": ("duration", "rentalLength", "leaseLength"),
+        "duration": ("duration", "rentalLength", "rentalLengthSeconds", "leaseLength"),
         "latitude": ("latitude", "lat"), "longitude": ("longitude", "lng", "lon"),
     }
     for field_name, keys in aliases.items():
@@ -190,21 +198,73 @@ def _candidate(mapping: Mapping[str, Any], base_url: str, source: str) -> Parsed
             continue
         if field_name == "rent": value = _number(value, integer=True)
         elif field_name in ("rooms", "area", "latitude", "longitude"): value = _number(value)
+        elif field_name == "duration" and isinstance(value, (int, float)):
+            value = f"{round(value / 86_400)} days"
         if value is not None:
             setattr(listing, field_name, value)
             listing.provenance[field_name] = source
+    location = _first(mapping, "location")
+    if listing.address is None and isinstance(location, Mapping):
+        address = " ".join(
+            str(value).strip()
+            for value in (_first(location, "route"), _first(location, "streetNumber"))
+            if value not in (None, "")
+        )
+        locality = _first(location, "locality", "city")
+        if locality:
+            address = f"{address}, {locality}" if address else str(locality)
+        if address:
+            listing.address = address
+            listing.provenance["address"] = source
     geo = _first(mapping, "geo", "coordinates", "location")
+    if isinstance(geo, Mapping) and isinstance(_first(geo, "point"), Mapping):
+        geo = _first(geo, "point")
     if isinstance(geo, Mapping):
         for field_name, keys in (("latitude", ("latitude", "lat")),
                                  ("longitude", ("longitude", "lng", "lon"))):
             if getattr(listing, field_name) is None and (value := _number(_first(geo, *keys))) is not None:
                 setattr(listing, field_name, value); listing.provenance[field_name] = source
     listing.provenance.update({"url": source, "external_id": source})
-    for key in ("housingType", "furnished", "sharedHome", "description", "floor"):
-        value = _first(mapping, key)
+    attribute_aliases = {
+        "housing_type": ("housingType", "homeType"),
+        "furnished": ("furnished",),
+        "shared": ("shared", "sharedHome"),
+        "pets_allowed": ("petsAllowed",),
+        "smoking_allowed": ("smokingAllowed",),
+        "wheelchair_accessible": ("wheelchairAccessible",),
+        "first_hand": ("firstHand",),
+        "student_home": ("studentHome",),
+        "senior_home": ("seniorHome",),
+        "instant_sign": ("instantSign",),
+        "corporate_home": ("corporateHome",),
+        "description": ("description",),
+        "floor": ("floor",),
+        "bedroom_count": ("bedroomCount",),
+        "household_size": ("householdSize",),
+        "published_at": ("publishedAt", "publishedOrBumpedAt"),
+        "base_rent": ("rent",),
+    }
+    for key, keys in attribute_aliases.items():
+        value = _first(mapping, *keys)
         if value is not None:
             listing.attributes[key] = value
             listing.provenance[key] = source
+    if listing.availability is None and listing.rental_start:
+        listing.availability = (
+            "fixed_period" if listing.rental_end else "until_further_notice"
+        )
+        listing.provenance["availability"] = "derived"
+    if listing.duration is None and listing.rental_start and listing.rental_end:
+        try:
+            days = (
+                date.fromisoformat(str(listing.rental_end)[:10])
+                - date.fromisoformat(str(listing.rental_start)[:10])
+            ).days
+        except ValueError:
+            pass
+        else:
+            listing.duration = f"{days} days"
+            listing.provenance["duration"] = "derived"
     return listing
 
 
@@ -213,6 +273,7 @@ def parse_qasa_html(
     *,
     base_url: str = "https://qasa.com",
     captured_json: Iterable[Any] = (),
+    results_only: bool = False,
 ) -> ParsedPage:
     doc = _Document()
     try:
@@ -223,11 +284,21 @@ def parse_qasa_html(
     lower = text.lower()
     found: list[ParsedListing] = []
     errors: list[str] = []
-    for payload in captured_json:
+    for captured in captured_json:
+        if results_only:
+            for mapping in _home_search_nodes(captured):
+                if item := _candidate(mapping, base_url, "captured-json"):
+                    found.append(item)
+            continue
+        payload = (
+            captured.get("payload")
+            if isinstance(captured, Mapping) and "__qasawatch_operation" in captured
+            else captured
+        )
         for mapping in _walk(payload):
             if item := _candidate(mapping, base_url, "captured-json"):
                 found.append(item)
-    for attrs, body in doc.scripts:
+    for attrs, body in (() if results_only else doc.scripts):
         script_type, script_id = attrs.get("type", ""), attrs.get("id", "")
         if "ld+json" not in script_type and script_id != "__NEXT_DATA__" and "application/json" not in script_type:
             continue
@@ -243,7 +314,7 @@ def parse_qasa_html(
             if item:
                 found.append(item)
     # Semantic links/data attributes survive CSS class churn.
-    for element in doc.elements:
+    for element in (() if results_only else doc.elements):
         attrs = element["attrs"]
         href = attrs.get("href")
         listing_id = attrs.get("data-listing-id") or attrs.get("data-home-id")
@@ -273,14 +344,41 @@ def parse_qasa_html(
             if getattr(target, name) is None and getattr(item, name) is not None:
                 setattr(target, name, getattr(item, name)); target.provenance[name] = item.provenance[name]
         target.attributes.update({k: v for k, v in item.attributes.items() if k not in target.attributes})
-    if len(merged) == 1:
-        _fill_text(merged[0], text, "text")
-        _fill_detail_text(merged[0], text, " ".join(doc.title_parts))
+    page_listing = _LISTING_PATH.search(urlparse(base_url).path)
+    detail_target = (
+        by_id.get(page_listing.group(1)) if page_listing else None
+    ) or (merged[0] if len(merged) == 1 else None)
+    if detail_target is not None:
+        _fill_text(detail_target, text, "text")
+        _fill_detail_text(detail_target, text, " ".join(doc.title_parts))
     explicit_empty = any(term in lower for term in ("inga bostäder matchar", "inga sökresultat", "no homes found", "0 bostäder"))
     loading = any(term in lower for term in ("laddar", "loading results", "hämtar bostäder"))
     auth = any(term in lower for term in ("logga in för att", "sign in to continue", "sessionen har gått ut"))
     captcha = any(term in lower for term in ("captcha", "verify you are human", "kontrollera att du är en människa"))
     return ParsedPage(tuple(merged), explicit_empty, loading, auth, captcha, tuple(errors))
+
+
+def _home_search_nodes(captured: Any) -> tuple[Mapping[str, Any], ...]:
+    """Return only the authoritative watcher result collection."""
+
+    operation = None
+    payload = captured
+    if isinstance(captured, Mapping) and "__qasawatch_operation" in captured:
+        operation = captured.get("__qasawatch_operation")
+        payload = captured.get("payload")
+    if operation not in (None, "HomeSearch") or not isinstance(payload, Mapping):
+        return ()
+    try:
+        nodes = payload["data"]["homeIndexSearch"]["documents"]["nodes"]
+    except (KeyError, TypeError):
+        return ()
+    if not isinstance(nodes, list):
+        return ()
+    return tuple(
+        node
+        for node in nodes
+        if isinstance(node, Mapping) and node.get("__typename") == "HomeDocument"
+    )
 
 
 def _fill_text(listing: ParsedListing, text: str, source: str) -> None:

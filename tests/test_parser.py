@@ -18,7 +18,7 @@ def test_hierarchical_extraction_deduplicates_and_ignores_css_classes():
     first, second = parsed.listings
     assert (first.address, first.rent, first.rooms, first.area) == ("Sveavägen 1, Stockholm", 9800, 2.0, 31.0)
     assert first.provenance["rent"] == "json-ld"
-    assert (second.rent, second.latitude, second.attributes["housingType"]) == (10300, 59.33, "apartment")
+    assert (second.rent, second.latitude, second.attributes["housing_type"]) == (10300, 59.33, "apartment")
 
 
 def test_detail_and_domain_adapter_preserve_provenance():
@@ -67,6 +67,145 @@ def test_captured_asset_with_numeric_id_is_not_a_listing():
 
     assert [item.external_id for item in page.listings] == ["1413701"]
     assert page.listings[0].url == "https://qasa.com/home/1413701"
+
+
+def test_qasa_home_search_ignores_nested_location_and_upload_ids():
+    payload = {
+        "data": {
+            "homeIndexSearch": {
+                "documents": {
+                    "nodes": [
+                        {
+                            "__typename": "HomeDocument",
+                            "id": "1413568",
+                            "monthlyCost": 9429,
+                            "rent": 8900,
+                            "roomCount": 1,
+                            "squareMeters": 25,
+                            "startDate": "2026-07-15T00:00:00+00:00",
+                            "endDate": None,
+                            "publishedAt": "2026-07-13T07:11:56Z",
+                            "homeType": "apartment",
+                            "furnished": False,
+                            "petsAllowed": True,
+                            "location": {
+                                "__typename": "HomeDocumentLocationType",
+                                "id": "3496272",
+                                "route": "Körsbärsvägen",
+                                "streetNumber": None,
+                                "locality": "Stockholm",
+                                "point": {
+                                    "__typename": "GeoPoint",
+                                    "lat": 59.349161,
+                                    "lon": 18.0640409,
+                                },
+                            },
+                            "uploads": [
+                                {
+                                    "__typename": "HomeDocumentUploadType",
+                                    "id": "20776638",
+                                    "url": "https://qasa-static.example/photo.jpg",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+    page = parse_qasa_html(
+        "<html></html>", captured_json=[payload], results_only=True
+    )
+
+    assert [item.external_id for item in page.listings] == ["1413568"]
+    listing = page.listings[0]
+    assert listing.address == "Körsbärsvägen, Stockholm"
+    assert (listing.latitude, listing.longitude) == (59.349161, 18.0640409)
+    assert listing.rent == 9429
+    assert listing.rental_start == "2026-07-15T00:00:00+00:00"
+    assert listing.availability == "until_further_notice"
+    assert listing.attributes["base_rent"] == 8900
+    assert listing.attributes["pets_allowed"] is True
+
+
+def test_results_mode_ignores_other_qasa_payloads_recommendations_and_dom_links():
+    authoritative = {
+        "__qasawatch_operation": "HomeSearch",
+        "payload": {
+            "data": {
+                "homeIndexSearch": {
+                    "documents": {
+                        "nodes": [
+                            {
+                                "__typename": "SponsoredCard",
+                                "id": "sponsored-1",
+                                "monthlyCost": 1,
+                            },
+                            {
+                                "__typename": "HomeDocumentLocationType",
+                                "id": "location-1",
+                                "roomCount": 2,
+                            },
+                            {
+                                "__typename": "HomeDocument",
+                                "id": "real-1",
+                                "monthlyCost": 9000,
+                                "roomCount": 2,
+                            }
+                        ]
+                    }
+                }
+            },
+            "recommendations": [
+                {"__typename": "HomeDocument", "id": "recommended-1", "monthlyCost": 1}
+            ],
+        },
+    }
+    unrelated = {
+        "__qasawatch_operation": "Recommendations",
+        "payload": {
+            "data": {
+                "homes": [
+                    {"__typename": "HomeDocument", "id": "recommended-2", "monthlyCost": 1}
+                ]
+            }
+        },
+    }
+
+    page = parse_qasa_html(
+        '<a href="/home/dom-only">not a result card</a>',
+        captured_json=[unrelated, authoritative],
+        results_only=True,
+    )
+
+    assert [item.external_id for item in page.listings] == ["real-1"]
+
+
+def test_detail_fallback_targets_page_id_when_recommendations_are_present():
+    page = parse_qasa_html(
+        """
+        <html><head><title>Testgatan 1, Stockholm - Lägenhet | Qasa</title></head>
+        <body>
+        <a href="/home/1">Requested listing</a>
+        <a href="/home/2">Recommended listing</a>
+        Lägenhet · 2 rum · 48 m²
+        Hyresperiod 2026-08-22 2027-04-30
+        Månadskostnad 10 065 kr
+        </body></html>
+        """,
+        base_url="https://qasa.com/se/sv/home/1",
+    )
+
+    requested = next(item for item in page.listings if item.external_id == "1")
+    recommendation = next(item for item in page.listings if item.external_id == "2")
+    assert requested.address == "Testgatan 1, Stockholm"
+    assert (requested.rooms, requested.area, requested.rent) == (2.0, 48.0, 10_065)
+    assert (requested.rental_start, requested.rental_end) == (
+        "2026-08-22",
+        "2027-04-30",
+    )
+    assert recommendation.rent is None
 
 
 def test_detail_semantic_fallback_extracts_period_total_rent_and_duration():

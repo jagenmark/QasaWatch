@@ -87,6 +87,16 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
         sheets_credentials_secret_ref: str = Form(""),
         discord_webhook_secret_ref: str = Form(""),
         smtp_secret_ref: str = Form(""),
+        attribute_furnished: str | None = Form(None),
+        attribute_shared: str | None = Form(None),
+        attribute_pets_allowed: str | None = Form(None),
+        attribute_smoking_allowed: str | None = Form(None),
+        attribute_wheelchair_accessible: str | None = Form(None),
+        attribute_first_hand: str | None = Form(None),
+        attribute_student_home: str | None = Form(None),
+        attribute_senior_home: str | None = Form(None),
+        attribute_instant_sign: str | None = Form(None),
+        attribute_corporate_home: str | None = Form(None),
     ):
         try:
             existing = await service.get_config()
@@ -100,10 +110,37 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
                 discord["webhook_secret_ref"] = discord_webhook_secret_ref.strip()
             if smtp_secret_ref.strip():
                 email["smtp_secret_ref"] = smtp_secret_ref.strip()
+            filters = json.loads(filters_json)
+            if not isinstance(filters, dict):
+                raise ValueError("filters_json must contain a JSON object")
+            attribute_requirements = dict(filters.get("attribute_requirements") or {})
+            attribute_controls = {
+                "furnished": attribute_furnished,
+                "shared": attribute_shared,
+                "pets_allowed": attribute_pets_allowed,
+                "smoking_allowed": attribute_smoking_allowed,
+                "wheelchair_accessible": attribute_wheelchair_accessible,
+                "first_hand": attribute_first_hand,
+                "student_home": attribute_student_home,
+                "senior_home": attribute_senior_home,
+                "instant_sign": attribute_instant_sign,
+                "corporate_home": attribute_corporate_home,
+            }
+            for key, raw_value in attribute_controls.items():
+                if raw_value is None:
+                    continue
+                value = raw_value.strip().lower()
+                if value == "ignore":
+                    attribute_requirements.pop(key, None)
+                elif value in {"true", "false"}:
+                    attribute_requirements[key] = value == "true"
+                else:
+                    raise ValueError(f"invalid attribute requirement for {key}")
+            filters["attribute_requirements"] = attribute_requirements
             config = WatcherConfig(
                 enabled=enabled, qasa_results_url=qasa_results_url,
                 base_interval_minutes=base_interval_minutes, jitter_minutes=jitter_minutes,
-                destinations=json.loads(destinations_json), filters=json.loads(filters_json),
+                destinations=json.loads(destinations_json), filters=filters,
                 sheets=sheets, discord=discord, email=email, scb=json.loads(scb_json), safe_mode=safe_mode,
                 maps_api_secret_ref=(
                     maps_api_secret_ref.strip()

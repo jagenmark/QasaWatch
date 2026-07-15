@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from dataclasses import dataclass
@@ -52,7 +53,11 @@ class QasaBrowser:
         return descriptor
 
     async def connect(self) -> None:
-        descriptor = await self.start_host()
+        descriptor = self._descriptor
+        if descriptor is None or not await asyncio.to_thread(
+            self.host.descriptor_healthy, descriptor
+        ):
+            descriptor = await self.start_host()
         try:
             from playwright.async_api import async_playwright
         except ImportError as exc:
@@ -70,6 +75,11 @@ class QasaBrowser:
             self._browser = None
             raise
         self._descriptor = descriptor
+
+    async def host_running(self) -> bool:
+        return await asyncio.to_thread(
+            self.host.descriptor_healthy, self._descriptor
+        )
 
     async def close(self) -> None:
         # Stopping Playwright drops its transport. Do not call Browser.close(),
@@ -98,7 +108,19 @@ class QasaBrowser:
                     content_type = headers.get("content-type", "").lower()
                     length = int(headers.get("content-length", "0") or 0)
                     if "json" in content_type and length <= 5_000_000 and len(captured_json) < 50:
-                        captured_json.append(await response.json())
+                        payload = await response.json()
+                        operation_name = None
+                        try:
+                            request_body = json.loads(response.request.post_data or "{}")
+                            operation_name = request_body.get("operationName")
+                        except (json.JSONDecodeError, TypeError, AttributeError):
+                            pass
+                        captured_json.append(
+                            {
+                                "__qasawatch_operation": operation_name,
+                                "payload": payload,
+                            }
+                        )
                 except (ValueError, TypeError, OSError):
                     return
 
@@ -112,7 +134,9 @@ class QasaBrowser:
             finally:
                 await page.close()
 
-    async def scan(self, url: str, *, timeout: float = 20.0) -> BrowserScan:
+    async def scan(
+        self, url: str, *, timeout: float = 20.0, results_only: bool = False
+    ) -> BrowserScan:
         async def operation(page: Any) -> BrowserScan:
             deadline = time.monotonic() + timeout
             samples: list[PageSample] = []
@@ -122,6 +146,7 @@ class QasaBrowser:
                 latest = parse_qasa_html(
                     await page.content(), base_url=page.url,
                     captured_json=getattr(page, "_qasawatch_captured_json", ()),
+                    results_only=results_only,
                 )
                 keys = tuple(sorted(item.external_id or item.url for item in latest.listings))
                 samples.append(PageSample(page.url, keys, latest.explicit_empty, latest.loading,

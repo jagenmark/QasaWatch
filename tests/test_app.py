@@ -1,9 +1,11 @@
 import httpx
+import pytest
+from pydantic import ValidationError
 
 from qasawatch.app import create_app
 from qasawatch.db import Database
 from qasawatch.pipeline import Pipeline
-from qasawatch.schemas import WatcherConfig
+from qasawatch.schemas import FilterSettings, WatcherConfig
 from qasawatch.service import AppService
 
 
@@ -47,3 +49,44 @@ async def test_disabled_watcher_starts_browser_for_manual_profile_access(tmp_pat
     async with app.router.lifespan_context(app):
         assert browser.connected
         assert service.last_browser_state["status"] == "running"
+
+
+def test_filter_attribute_requirements_reject_unknown_keys():
+    with pytest.raises(ValidationError):
+        FilterSettings(attribute_requirements={"unbounded_attribute": True})
+
+
+async def test_config_form_persists_false_and_removes_ignored_attribute(tmp_path):
+    db = Database(tmp_path / "attribute-form.db")
+    await db.initialize()
+    service = AppService(db, NoBrowser(), Pipeline(db))
+    await service.save_config(WatcherConfig(filters={
+        "minimum_rent": 5000,
+        "attribute_requirements": {"furnished": True, "pets_allowed": False},
+    }))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service)), base_url="http://test"
+    ) as client:
+        dashboard = await client.get("/")
+        response = await client.post("/config", data={
+            "qasa_results_url": "https://qasa.com/se/sv/find-home",
+            "filters_json": '{"minimum_rent": 5000, "attribute_requirements": {"furnished": true, "pets_allowed": false}}',
+            "attribute_furnished": "false",
+            "attribute_pets_allowed": "ignore",
+        })
+
+    assert 'name="attribute_furnished"' in dashboard.text
+    assert 'name="attribute_shared"' in dashboard.text
+    assert 'name="attribute_pets_allowed"' in dashboard.text
+    furnished_control = dashboard.text.split('name="attribute_furnished"', 1)[1].split("</select>", 1)[0]
+    pets_control = dashboard.text.split('name="attribute_pets_allowed"', 1)[1].split("</select>", 1)[0]
+    shared_control = dashboard.text.split('name="attribute_shared"', 1)[1].split("</select>", 1)[0]
+    assert 'value="true" selected' in furnished_control
+    assert 'value="false" selected' in pets_control
+    assert 'value="ignore" selected' in shared_control
+    assert response.status_code == 303
+    saved = await service.get_config()
+    assert saved.filters.minimum_rent == 5000
+    assert saved.filters.attribute_requirements == {"furnished": False}
+    await db.dispose()

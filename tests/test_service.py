@@ -17,8 +17,9 @@ from qasawatch.service import AppService, IncompletePageError
 
 
 class FakeBrowser:
-    def __init__(self, rent=9000): self.rent = rent
-    async def scan(self, url):
+    def __init__(self, rent=9000): self.rent = rent; self.scan_modes = []
+    async def scan(self, url, *, results_only=False):
+        self.scan_modes.append(results_only)
         item = ParsedListing(url=url, external_id="manual-1", rent=self.rent, address="Test")
         return BrowserScan(ParsedPage((item,)), ReadinessResult(ReadinessState.READY, "ok", ("manual-1",)), url)
 
@@ -49,9 +50,11 @@ async def database(tmp_path):
 
 
 async def test_manual_rejection_is_full_and_does_not_create_watcher_history(database):
-    service = AppService(database, FakeBrowser(20_000), Pipeline(database, filters=FilterChain([NumericRangeFilter("rent", maximum=10_000)])))
+    browser = FakeBrowser(20_000)
+    service = AppService(database, browser, Pipeline(database, filters=FilterChain([NumericRangeFilter("rent", maximum=10_000)])))
     history_id, result = await service.process_manual("https://qasa.com/se/sv/home/manual-1")
     assert history_id and not result.decision.accepted and result.data["rent"] == 20_000
+    assert browser.scan_modes == [False]
     async with database.sessions() as session:
         assert await session.scalar(select(func.count(ManualProcessing.id))) == 1
         assert await session.scalar(select(func.count(Listing.id))) == 0
@@ -108,7 +111,7 @@ async def test_manual_email_promotion_sends_one_message_in_grouped_scan_mode(dat
 
 async def test_manual_expired_page_does_not_process_recommended_listing(database):
     class RecommendationsOnly:
-        async def scan(self, url):
+        async def scan(self, url, *, results_only=False):
             item = ParsedListing(
                 url="https://qasa.com/home/different",
                 external_id="different",
@@ -141,6 +144,21 @@ async def test_safe_scan_does_not_backfill_outputs_when_production_is_enabled(da
     async with database.sessions() as session:
         delivery = await session.scalar(select(ListingDelivery))
         assert delivery.state == "skipped"
+
+
+async def test_watcher_explicitly_uses_strict_results_mode_for_any_qasa_route(database):
+    browser = FakeBrowser()
+    service = AppService(database, browser, Pipeline(database))
+    await service.save_config(
+        WatcherConfig(
+            qasa_results_url="https://qasa.com/se/sv/a-future-results-route",
+            safe_mode=True,
+        )
+    )
+
+    await service.run_watcher(reason="manual-run-now")
+
+    assert browser.scan_modes == [True]
 
 
 async def test_safe_scan_tombstones_channels_enabled_only_later(database):
@@ -224,7 +242,7 @@ async def test_output_failure_is_visible_without_blocking_durable_listing(databa
 
 async def test_concurrent_manual_requests_return_their_own_history_ids(database):
     class DynamicBrowser:
-        async def scan(self, url):
+        async def scan(self, url, *, results_only=False):
             external_id = url.rstrip("/").rsplit("/", 1)[-1]
             await asyncio.sleep(0)
             item = ParsedListing(url=url, external_id=external_id, rent=9000)

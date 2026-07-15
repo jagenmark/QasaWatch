@@ -34,7 +34,11 @@
     "availability_to": null,
     "minimum_population": null,
     "maximum_population": null,
-    "maximum_average_age": null
+    "maximum_average_age": null,
+    "attribute_requirements": {
+      "furnished": false,
+      "shared": false
+    }
   },
   "sheets": {
     "enabled": false,

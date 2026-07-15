@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import IO
 from urllib.request import urlopen
@@ -99,12 +99,15 @@ class ChromeHost:
         self.state_dir.mkdir(parents=True, exist_ok=True); self.profile_dir.mkdir(exist_ok=True)
         self._lock.acquire()
         descriptor = self.read_descriptor()
-        if descriptor and self.owns_process(descriptor):
-            if self._cdp_healthy(descriptor.port):
-                return descriptor
-            self._terminate_owned(descriptor)
+        owned = self._refresh_owned_descriptor(descriptor) if descriptor else None
+        if owned:
+            if owned != descriptor:
+                self._write_descriptor(owned)
+            if self._cdp_healthy(owned.port):
+                return owned
+            self._terminate_owned(owned)
             deadline = time.monotonic() + min(timeout, 5.0)
-            while self.owns_process(descriptor) and time.monotonic() < deadline:
+            while self._refresh_owned_descriptor(owned) and time.monotonic() < deadline:
                 time.sleep(0.05)
         chrome = (self.executable or find_chrome()).resolve()
         port = self.port or _free_loopback_port()
@@ -120,19 +123,34 @@ class ChromeHost:
         self._write_descriptor(descriptor)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if process.poll() is not None:
-                raise BrowserHostError(f"Chrome exited during startup ({process.returncode})")
+            returncode = process.poll()
             if self._cdp_healthy(port):
-                return descriptor
+                handed_off = self._refresh_owned_descriptor(descriptor)
+                if handed_off is not None and (
+                    returncode is None or handed_off.pid != process.pid
+                ):
+                    if handed_off != descriptor:
+                        self._write_descriptor(handed_off)
+                    return handed_off
+            if returncode is not None:
+                handed_off = self._refresh_owned_descriptor(descriptor)
+                if handed_off is not None:
+                    descriptor = handed_off
+                    self._write_descriptor(descriptor)
+                elif returncode != 0:
+                    raise BrowserHostError(f"Chrome exited during startup ({returncode})")
+                # Chrome on Windows can exit its launcher with code 0 before
+                # the long-lived browser process and CDP listener are visible.
             time.sleep(0.1)
         raise BrowserHostError("Chrome DevTools endpoint did not become ready")
 
     def recover(self, *, timeout: float = 15.0) -> BrowserDescriptor:
         old = self.read_descriptor()
-        if old and self.owns_process(old):
-            self._terminate_owned(old)
+        owned = self._refresh_owned_descriptor(old) if old else None
+        if owned:
+            self._terminate_owned(owned)
             deadline = time.monotonic() + min(timeout, 5.0)
-            while self.owns_process(old) and time.monotonic() < deadline:
+            while self._refresh_owned_descriptor(owned) and time.monotonic() < deadline:
                 time.sleep(0.05)
         return self.start_or_adopt(timeout=timeout)
 
@@ -145,8 +163,29 @@ class ChromeHost:
     def owns_process(self, descriptor: BrowserDescriptor) -> bool:
         """Validate PID, executable, profile and unguessable launch token."""
         command = _process_command_line(descriptor.pid)
-        if not command:
+        return bool(command and self._command_matches(descriptor, command))
+
+    def descriptor_healthy(self, descriptor: BrowserDescriptor | None = None) -> bool:
+        current = descriptor or self.read_descriptor()
+        if current is None:
             return False
+        owned = self._refresh_owned_descriptor(current)
+        return bool(owned and self._cdp_healthy(owned.port))
+
+    def _refresh_owned_descriptor(
+        self, descriptor: BrowserDescriptor
+    ) -> BrowserDescriptor | None:
+        """Resolve Chrome launcher-to-browser PID handoff without losing ownership."""
+
+        if self.owns_process(descriptor):
+            return descriptor
+        for pid, command in _iter_process_command_lines():
+            if self._command_matches(descriptor, command):
+                return replace(descriptor, pid=pid)
+        return None
+
+    @staticmethod
+    def _command_matches(descriptor: BrowserDescriptor, command: str) -> bool:
         folded = command.casefold()
         return (Path(descriptor.executable).name.casefold() in folded
                 and f"--qasawatch-owner={descriptor.owner_token}".casefold() in folded
@@ -196,3 +235,39 @@ def _process_command_line(pid: int) -> str | None:
         return result.stdout.strip() or None
     except (OSError, subprocess.TimeoutExpired):
         return None
+
+
+def _iter_process_command_lines() -> list[tuple[int, str]]:
+    if os.name != "nt":
+        values: list[tuple[int, str]] = []
+        for directory in Path("/proc").glob("[0-9]*"):
+            try:
+                command = (directory / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+                if command:
+                    values.append((int(directory.name), command))
+            except (OSError, ValueError):
+                continue
+        return values
+    script = (
+        "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+        "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if not result.stdout.strip():
+            return []
+        payload = json.loads(result.stdout)
+        rows = payload if isinstance(payload, list) else [payload]
+        return [
+            (int(row["ProcessId"]), str(row["CommandLine"]))
+            for row in rows
+            if row.get("ProcessId") and row.get("CommandLine")
+        ]
+    except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
+        return []

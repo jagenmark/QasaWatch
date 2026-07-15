@@ -2,13 +2,14 @@
 
 QasaWatch is a restartable Qasa listing watcher. It controls a real installed Google Chrome through a loopback-only Chrome DevTools Protocol (CDP) port, stores durable state in SQLite/WAL, and quarantines unstable, login, CAPTCHA, and incomplete pages instead of treating them as empty results.
 
-The packaged `qasawatch` command starts the dashboard and scheduler. It wires Qasa detail rendering, Google Maps commute enrichment, optional SCB GeoJSON, Google Sheets v4 service-account delivery, Discord webhooks, and generic SMTP from stored configuration and environment-secret references.
+The packaged `qasawatch` command starts the dashboard and scheduler. It wires rendered Qasa results parsing, Google Maps commute enrichment, optional SCB GeoJSON, Google Sheets v4 service-account delivery, Discord webhooks, and generic SMTP from stored configuration and environment-secret references.
 
 ## What is implemented
 
 - Durable SQLite configuration, scan leases, watcher/manual history, errors, delivery attempts, and grouped-email batches.
 - Persistent dedicated Chrome with loopback CDP and Playwright-over-CDP jobs.
-- Detail-page rendering for each genuinely new candidate before Maps/SCB/filter enrichment.
+- One rendered results-page load per watcher scan; Qasa's HomeSearch data supplies the complete visible result cards without per-listing browser navigation.
+- Detail-page rendering only for the explicit manual URL inspector.
 - Next-weekday 08:00 Europe/Stockholm arrival/departure commutes, filtering, durable outputs, dashboard/API review, promotion, retries, and safe verification mode.
 
 ## Install
@@ -54,7 +55,7 @@ The Chrome profile contains Qasa session cookies and may contain browser tokens.
    https://qasa.com/se/sv/find-home?ne_lat=59.395990187569225&ne_lng=18.166765064212683&sw_lat=59.29144514172344&sw_lng=17.958198610912206&maxRoomCount=3&maxMonthlyCost=10300&minSquareMeters=25&minRentalLength=15778476&sharedHome=privateHome
    ```
 
-4. Start with `safe_mode: true`. A safe live verification on 2026-07-14 used a persistent profile and this page, found 109 canonical candidates, and sent no outputs or enrichment API requests. Result counts naturally change.
+4. Start with `safe_mode: true`. Confirm the dashboard count matches the number of Qasa result cards before enabling production outputs; safe mode sends nothing.
 
 If Chrome crashes, the host only replaces a process it can prove it owns by PID, executable, profile path, and owner token. Do not run another supervisor against the profile. Re-authenticate manually if Qasa signs the profile out.
 

@@ -59,7 +59,7 @@ class AppService:
         found = 0
         fatal: BaseException | None = None
         try:
-            scan = await self.browser.scan(config.qasa_results_url)
+            scan = await self.browser.scan(config.qasa_results_url, results_only=True)
             self.last_browser_state = {
                 "status": scan.readiness.state.value,
                 "url": scan.final_url,
@@ -117,7 +117,7 @@ class AppService:
         return {"status": "completed_with_failures" if failures else "succeeded", "run_id": run_id, "found": found, "new": new, "accepted": accepted, "rejected": rejected, "failures": failures, "outputs": output_state, "safe_mode": config.safe_mode}
 
     async def process_manual(self, url: str, *, requested_by: str | None = None) -> tuple[int, ProcessingResult]:
-        scan = await self.browser.scan(url)
+        scan = await self.browser.scan(url, results_only=False)
         self.last_browser_state = {
             "status": scan.readiness.state.value,
             "url": scan.final_url,
@@ -307,10 +307,21 @@ class AppService:
             email_batches = list((await session.scalars(select(EmailBatch).order_by(EmailBatch.id.desc()).limit(20))).all())
         email = (await self.public_config())["email"]
         pending = sum(1 for item in listings for delivery in item.deliveries if delivery.channel == "email" and delivery.state in ("pending", "failed", "manual_review")) + sum(1 for batch in email_batches if batch.state in ("pending", "retryable", "manual_review"))
+        browser_state = dict(self.last_browser_state)
+        health_probe = getattr(self.browser, "host_running", None)
+        if health_probe is not None:
+            try:
+                host_running = bool(await health_probe())
+            except Exception:
+                host_running = False
+            browser_state["host_running"] = host_running
+            if not host_running:
+                browser_state["last_page_status"] = browser_state.get("status")
+                browser_state["status"] = "stopped"
         return {
             "config": await self.public_config(),
             "watcher": {"running": bool(self.scheduler and self.scheduler.running), "lease_healthy": bool(not self.scheduler or self.scheduler.lease_healthy), "last_error": self.scheduler.last_error if self.scheduler else None, "next_run": (await self.scheduler.next_run()).isoformat() if self.scheduler and await self.scheduler.next_run() else None},
-            "browser": self.last_browser_state,
+            "browser": browser_state,
             "runs": runs, "listings": listings, "errors": errors, "manual": manual,
             "email": {
                 **email, "pending": pending, "latest_test": self.last_test_email,

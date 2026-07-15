@@ -7,14 +7,16 @@
 | Field | Meaning |
 | --- | --- |
 | `enabled` | Enables scheduled scans. Two or more destinations are required when true. |
-| `safe_mode` | Blocks production outputs, promotion/retry delivery, grouped-batch resend, and test email. It does not disable detail, Maps, or local SCB enrichment. Enabled per-listing channels are durably marked skipped for newly accepted safe-mode results, so switching safe mode off cannot backfill old test discoveries. |
+| `safe_mode` | Blocks production outputs, promotion/retry delivery, grouped-batch resend, and test email. It does not disable results parsing, manual detail inspection, Maps, or local SCB enrichment. Enabled per-listing channels are durably marked skipped for newly accepted safe-mode results, so switching safe mode off cannot backfill old test discoveries. |
 | `qasa_results_url` | Exact HTTPS Qasa results URL. The supplied filtered URL is in the example config. |
 | `base_interval_minutes` / `jitter_minutes` | Cadence of 1-1440 minutes plus/minus 0-120 minutes. |
 | `destinations` | `label`, `address`, `commute_mode` (`arrival`/`departure`), and optional `maximum_commute_minutes`. |
-| `filters` | Rent, rooms, area, commute, locations, keywords, availability, and demographic limits. |
+| `filters` | Rent, rooms, area, commute, locations, keywords, availability, demographic limits, and tri-state listing-attribute requirements. |
 | `maps_api_secret_ref` | `env:` reference for the Google Maps key; Maps is used only when it and destinations are configured. |
 
-For every new candidate, the runtime renders the canonical Qasa detail page first, merges useful detail fields, then runs Maps/SCB enrichment and filters. Commutes use the next strict future weekday at 08:00 in `Europe/Stockholm`. Arrival destinations get an 08:00 arrival time; departure destinations get an 08:00 departure time.
+Each watcher scan opens one temporary tab for the configured rendered results page, captures its first-party HomeSearch response, parses only actual `HomeDocument` listings, and closes the tab. It does not open every listing. Manual URL inspection still renders the submitted detail page. Commutes use the next strict future weekday at 08:00 in `Europe/Stockholm`. Arrival destinations get an 08:00 arrival time; departure destinations get an 08:00 departure time.
+
+`filters.attribute_requirements` maps a supported boolean attribute to `true` or `false`. The dashboard exposes Ignore / Require yes / Require no controls for furnished, shared, pets, smoking, wheelchair access, first-hand, student/senior, instant-sign, and corporate homes. An enabled requirement rejects a missing value and records an explicit reason.
 
 ## Google Maps
 
@@ -30,7 +32,7 @@ The concrete Sheets v4 client accepts the resolved secret as either compact serv
 
 ## Discord
 
-Create a webhook for a least-privilege channel. Store the URL in `QASAWATCH_DISCORD_WEBHOOK_URL` and persist only `env:QASAWATCH_DISCORD_WEBHOOK_URL` in `webhook_secret_ref`. The runtime sends an HTTPS webhook with mentions disabled and an idempotency header. Keep safe mode on until the channel is verified.
+Create a webhook for a least-privilege channel. Store the URL in `QASAWATCH_DISCORD_WEBHOOK_URL` and persist only `env:QASAWATCH_DISCORD_WEBHOOK_URL` in `webhook_secret_ref`. The runtime sends a Swedish listing summary with rent, area, address, rooms, rental period, commute bullets, and available demographics. Mentions are disabled and the request carries an idempotency header. Keep safe mode on until the channel is verified.
 
 ## SMTP email
 
