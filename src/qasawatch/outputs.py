@@ -269,11 +269,28 @@ class DiscordWebhookOutput:
         demographics = data.get("demographics") or data.get("scb")
         demographic_lines: list[str] = []
         if isinstance(demographics, Mapping):
-            demographic_lines = [
-                f"- {name}: {value}"
-                for name, value in demographics.items()
-                if value not in (None, "")
-            ]
+            for name, value in demographics.items():
+                if value in (None, ""):
+                    continue
+                if name == "foreign_background_percent":
+                    demographic_lines.append(
+                        f"- Foreign background in the surrounding area: approx. {value}%"
+                    )
+                elif name == "source":
+                    year = demographics.get("reference_year")
+                    demographic_lines.append(
+                        f"- Source: {value}{f' {year}' if year else ''}"
+                    )
+                elif name == "reference_year" and demographics.get("source"):
+                    continue
+                else:
+                    label = {
+                        "population": "Population",
+                        "area_level": "Area level",
+                        "precision": "Precision",
+                        "reference_year": "Reference year",
+                    }.get(str(name), str(name).replace("_", " ").capitalize())
+                    demographic_lines.append(f"- {label}: {value}")
         elif demographics not in (None, ""):
             demographic_lines = [f"- {demographics}"]
         if demographic_lines:

@@ -71,7 +71,14 @@ async def test_discord_formats_swedish_listing_with_separate_enrichment_bullets(
                 "skola": {"status": "api_failure"},
                 "förskola": {},
             },
-            "demographics": {"befolkning": 42, "hushåll": 21},
+            "demographics": {
+                "foreign_background_percent": 46.6,
+                "population": 1846,
+                "area_level": "DeSO",
+                "precision": "neighborhood-level estimate, not exact address-level data",
+                "source": "SCB",
+                "reference_year": "2025",
+            },
         },
         value.discovered_at,
     )
@@ -96,8 +103,11 @@ async def test_discord_formats_swedish_listing_with_separate_enrichment_bullets(
             "- skola: api_failure\n"
             "- förskola: unknown\n\n"
             "Brown Watch / Demographics:\n"
-            "- befolkning: 42\n"
-            "- hushåll: 21"
+            "- Foreign background in the surrounding area: approx. 46.6%\n"
+            "- Population: 1846\n"
+            "- Area level: DeSO\n"
+            "- Precision: neighborhood-level estimate, not exact address-level data\n"
+            "- Source: SCB 2025"
         ),
         "allowed_mentions": {"parse": []},
     }
@@ -127,7 +137,7 @@ async def test_discord_omits_missing_fields_and_handles_open_ended_period_safely
     assert "Uthyrningsperiod: 2026-08-22 - Tillsvidare" in client.payload["content"]
     assert "Hyra:" not in client.payload["content"]
     assert "Pendling:" not in client.payload["content"]
-    assert "- notis: @here" in client.payload["content"]
+    assert "- Notis: @here" in client.payload["content"]
     assert "saknas" not in client.payload["content"]
     assert len(client.payload["content"]) <= 1900
     assert client.payload["allowed_mentions"] == {"parse": []}

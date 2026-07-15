@@ -57,3 +57,11 @@ SCB is optional. Configure `scb.data_path`, `id_column`, `name_column`, `demogra
 Each feature needs the configured ID/name properties and Polygon or MultiPolygon geometry. `demographic_mapping` maps output names to source properties; `municipality_mapping` is retained configuration for local municipality-code interpretation. QasaWatch never transforms CRS or silently treats projected coordinates as WGS84: convert data before loading.
 
 An absent or invalid configured dataset becomes an unavailable partial SCB result and does not abort a listing scan. Pin the expected `vintage`, record source/vintage/checksum with deployment, and test a known point after a refresh.
+
+For the Stockholm-only local dataset used by the default deployment, run:
+
+```sh
+uv run python scripts/build_stockholm_scb.py
+```
+
+The builder downloads SCB's DeSO 2025 WFS polygons for municipality `0180` and joins SCB table `FolkmDesoBakgrKon` (`TAB6571`) for reference year 2025. It stores total population, foreign-background count and calculated share, area level, precision and source metadata in `data/scb/stockholm-deso-2025.geojson`. SCB applies Cell Key Method uncertainty to 2025 values, so the percentage is labelled approximate. Re-run the builder deliberately when adopting a newer compatible geography/statistics vintage, then update and verify `scb.vintage`.
