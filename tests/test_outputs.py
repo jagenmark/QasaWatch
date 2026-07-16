@@ -141,3 +141,35 @@ async def test_discord_omits_missing_fields_and_handles_open_ended_period_safely
     assert "saknas" not in client.payload["content"]
     assert len(client.payload["content"]) <= 1900
     assert client.payload["allowed_mentions"] == {"parse": []}
+
+
+@pytest.mark.asyncio
+async def test_discord_omits_internal_scb_diagnostic_when_area_does_not_match():
+    value = listing()
+    unmatched = ListingSnapshot(
+        value.id,
+        value.provider,
+        value.url,
+        value.external_id,
+        value.stage,
+        {
+            "address": "Outside dataset",
+            "demographics": {},
+            "scb": {
+                "status": "not_matched",
+                "source": "SCB",
+                "vintage": "2025",
+                "diagnostic": "point is outside dataset polygons",
+            },
+        },
+        value.discovered_at,
+    )
+    client = Webhook()
+
+    await DiscordWebhookOutput("https://discord.test/hook", client).deliver(
+        unmatched, idempotency_key="key"
+    )
+
+    assert "Brown Watch / Demographics:" not in client.payload["content"]
+    assert "not_matched" not in client.payload["content"]
+    assert "outside dataset polygons" not in client.payload["content"]

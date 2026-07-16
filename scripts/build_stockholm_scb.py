@@ -1,4 +1,4 @@
-"""Build the local Stockholm DeSO 2025 demographic dataset from SCB open data."""
+"""Build the local Stockholm County DeSO 2025 dataset from SCB open data."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ PXWEB_URL = (
     "https://api.scb.se/OV0104/v1/doris/en/ssd/"
     "BE/BE0101/BE0101Y/FolkmDesoBakgrKon"
 )
-MUNICIPALITY = "0180"
+COUNTY = "01"
 YEAR = "2025"
 
 
@@ -47,13 +47,13 @@ def _geography() -> dict[str, Any]:
             "typeNames": "stat:DeSO_2025",
             "outputFormat": "application/json",
             "srsName": "EPSG:4326",
-            "CQL_FILTER": f"kommunkod='{MUNICIPALITY}'",
+            "CQL_FILTER": f"lanskod='{COUNTY}'",
         }
     )
     document = _request_json(f"{WFS_URL}?{query}")
     features = document.get("features")
     if not isinstance(features, list) or not features:
-        raise ValueError("SCB WFS returned no Stockholm DeSO features")
+        raise ValueError("SCB WFS returned no Stockholm County DeSO features")
     return document
 
 
@@ -141,7 +141,7 @@ def build(output: Path) -> dict[str, Any]:
             "source": "SCB",
             "vintage": YEAR,
             "crs": "EPSG:4326",
-            "region": "Stockholm municipality (0180)",
+            "region": "Stockholm County (01)",
             "generated_at": datetime.now(UTC).isoformat(),
             "geography_source": WFS_URL,
             "statistics_source": PXWEB_URL,

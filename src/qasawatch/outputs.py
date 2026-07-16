@@ -266,7 +266,7 @@ class DiscordWebhookOutput:
         if commute_lines:
             lines.extend(("", "Pendling:", *commute_lines))
 
-        demographics = data.get("demographics") or data.get("scb")
+        demographics = data.get("demographics")
         demographic_lines: list[str] = []
         if isinstance(demographics, Mapping):
             for name, value in demographics.items():
