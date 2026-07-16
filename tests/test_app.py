@@ -1,9 +1,12 @@
+from datetime import UTC, datetime
+
 import httpx
 import pytest
 from pydantic import ValidationError
 
 from qasawatch.app import create_app
 from qasawatch.db import Database
+from qasawatch.models import ProcessingError, Run
 from qasawatch.pipeline import Pipeline
 from qasawatch.schemas import FilterSettings, WatcherConfig
 from qasawatch.service import AppService
@@ -282,4 +285,35 @@ async def test_dashboard_can_clear_redacted_smtp_username(tmp_path):
 
     assert response.status_code == 303
     assert (await service.get_config()).email.smtp_username is None
+    await db.dispose()
+
+
+async def test_dashboard_error_history_includes_time_and_run_link(tmp_path):
+    db = Database(tmp_path / "error-history.db")
+    await db.initialize()
+    service = AppService(db, NoBrowser(), Pipeline(db))
+    occurred = datetime(2026, 7, 16, 9, 30, 15, tzinfo=UTC)
+    async with db.sessions.begin() as session:
+        run = Run(status="failed")
+        session.add(run)
+        await session.flush()
+        run_id = run.id
+        session.add(ProcessingError(
+            run_id=run_id,
+            operation="safe_processing:123",
+            error_type="RuntimeError",
+            message="route API unavailable",
+            created_at=occurred,
+        ))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service)), base_url="http://test"
+    ) as client:
+        response = await client.get("/")
+
+    assert response.status_code == 200
+    assert "Recent error history" in response.text
+    assert "2026-07-16 09:30:15" in response.text
+    assert f'href="#run-{run_id}"' in response.text
+    assert "route API unavailable" in response.text
     await db.dispose()
