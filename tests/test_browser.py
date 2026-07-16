@@ -141,6 +141,23 @@ def test_process_ownership_matches_exact_procfs_arguments(tmp_path, monkeypatch)
     assert host.owns_process(descriptor)
 
 
+def test_process_ownership_accepts_snap_single_procfs_argument(tmp_path, monkeypatch):
+    host = ChromeHost(tmp_path)
+    descriptor = BrowserDescriptor(
+        42, 9222, "secret", "/snap/bin/chromium", "/tmp/profile", 1.0
+    )
+    command = (
+        "/snap/chromium/current/usr/lib/chromium-browser/chrome "
+        "--remote-debugging-port=9222 --user-data-dir=/tmp/profile "
+        "--qasawatch-owner=secret",
+    )
+    monkeypatch.setattr(
+        "qasawatch.browser_host._process_command_line", lambda pid: command
+    )
+
+    assert host.owns_process(descriptor)
+
+
 def test_find_chrome_honors_explicit_executable(tmp_path, monkeypatch):
     chrome = tmp_path / "custom chrome"
     chrome.touch()
@@ -155,6 +172,22 @@ def test_find_chrome_rejects_missing_explicit_executable(tmp_path, monkeypatch):
 
     with pytest.raises(BrowserHostError, match="does not point to a file"):
         find_chrome()
+
+
+def test_find_chrome_preserves_snap_launcher_symlink(tmp_path, monkeypatch):
+    snap = tmp_path / "usr" / "bin" / "snap"
+    snap.parent.mkdir(parents=True)
+    snap.touch()
+    launcher = tmp_path / "snap" / "bin" / "chromium"
+    launcher.parent.mkdir(parents=True)
+    launcher.symlink_to(snap)
+    monkeypatch.delenv("QASAWATCH_CHROME_EXECUTABLE", raising=False)
+    monkeypatch.setattr(
+        "qasawatch.browser_host.shutil.which",
+        lambda name: str(launcher) if name == "chromium" else None,
+    )
+
+    assert find_chrome() == launcher.absolute()
 
 
 def home_search_payload(ids, *, has_next, pages=3, total=6):
@@ -261,6 +294,54 @@ def test_linux_startup_requires_graphical_display(tmp_path, monkeypatch):
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
 
     with pytest.raises(BrowserHostError, match="graphical display"):
+        host.start_or_adopt()
+
+    host.close()
+
+
+def test_posix_browser_state_is_owner_only(tmp_path, monkeypatch):
+    chrome = tmp_path / "chrome"
+    chrome.touch()
+    host = ChromeHost(tmp_path / "state", executable=chrome, port=9222)
+    monkeypatch.setattr("qasawatch.browser_host.os.name", "posix")
+    monkeypatch.setattr("qasawatch.browser_host.sys.platform", "linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+    with pytest.raises(BrowserHostError, match="graphical display"):
+        host.start_or_adopt()
+
+    assert host.state_dir.stat().st_mode & 0o777 == 0o700
+    assert host.profile_dir.stat().st_mode & 0o777 == 0o700
+    host.close()
+
+
+def test_linux_startup_reports_unavailable_chrome_sandbox(tmp_path, monkeypatch):
+    chrome = tmp_path / "chrome"
+    chrome.touch()
+    host = ChromeHost(tmp_path / "state", executable=chrome, port=9222)
+    monkeypatch.setattr("qasawatch.browser_host.sys.platform", "linux")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(host, "_cdp_healthy", lambda port: False)
+    monkeypatch.setattr(host, "_refresh_owned_descriptor", lambda descriptor: None)
+
+    class FailedChrome:
+        pid = 42
+
+        @staticmethod
+        def poll():
+            return 133
+
+    def failed_start(*args, **kwargs):
+        kwargs["stderr"].write(
+            b"FATAL: No usable sandbox! Ubuntu AppArmor blocks user namespaces."
+        )
+        kwargs["stderr"].flush()
+        return FailedChrome()
+
+    monkeypatch.setattr("qasawatch.browser_host.subprocess.Popen", failed_start)
+
+    with pytest.raises(BrowserHostError, match="AppArmor"):
         host.start_or_adopt()
 
     host.close()

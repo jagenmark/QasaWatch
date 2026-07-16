@@ -48,13 +48,20 @@ class WatchScheduler:
         await self.config_store.set_value("scheduler.next_run", next_at.isoformat())
         return next_at
 
+    async def _reschedule_if_enabled(self) -> datetime | None:
+        config = await self._config()
+        if not config.enabled:
+            await self.config_store.set_value("scheduler.next_run", None)
+            return None
+        return await self.schedule_next()
+
     async def run_once(self, *, reason: str = "scheduled"):
         if self._run_lock.locked():
             return {"status": "overlap", "reason": reason}
         async with self._run_lock:
             lease = await self.database.acquire_scan_lease("watcher-scan", self.owner, ttl=self.lease_ttl)
             if not lease.acquired:
-                await self.schedule_next()
+                await self._reschedule_if_enabled()
                 return {"status": "overlap", "reason": reason, "lease_expires_at": lease.expires_at.isoformat()}
             self.running = True
             heartbeat = asyncio.create_task(
@@ -87,7 +94,7 @@ class WatchScheduler:
                 await asyncio.gather(heartbeat, return_exceptions=True)
                 self.running = False
                 await self.database.release_scan_lease("watcher-scan", self.owner)
-                await self.schedule_next()
+                await self._reschedule_if_enabled()
 
     async def run_now(self):
         result = await self.run_once(reason="manual-run-now")
@@ -105,8 +112,8 @@ class WatchScheduler:
             self._task = None
 
     async def config_changed(self) -> None:
-        await self.schedule_next()
         self._wake.set()
+        await self._reschedule_if_enabled()
 
     async def _config(self):
         from .schemas import WatcherConfig
@@ -119,6 +126,8 @@ class WatchScheduler:
             self._wake.clear()
             config = await self._config()
             if not config.enabled:
+                if not self._wake.is_set():
+                    await self.config_store.set_value("scheduler.next_run", None)
                 await self._wake.wait()
                 continue
             target = await self.next_run() or await self.schedule_next()

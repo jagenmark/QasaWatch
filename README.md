@@ -422,6 +422,13 @@ If Chrome or Chromium is installed in an unusual location, add its full path to
 QASAWATCH_CHROME_EXECUTABLE=/full/path/to/google-chrome
 ```
 
+On Ubuntu 23.10 or newer, an unpacked or manually downloaded Chromium build may
+fail because AppArmor blocks the browser's user-namespace sandbox. Install
+Google Chrome through its official Debian package or Chromium through Ubuntu's
+package manager so the required system integration is installed. QasaWatch
+will report this condition explicitly. Do not work around it with
+`--no-sandbox`, and do not start QasaWatch with `sudo`.
+
 Do not start QasaWatch with `sudo`; run it as your normal desktop user. For a
 headless Linux server, use the dedicated non-root service account and Xvfb
 configuration from the operations guide.

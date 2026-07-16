@@ -39,7 +39,7 @@ def find_chrome() -> Path:
     if configured:
         candidate = Path(configured).expanduser()
         if candidate.is_file():
-            return candidate.resolve()
+            return candidate.absolute()
         raise BrowserHostError(
             f"QASAWATCH_CHROME_EXECUTABLE does not point to a file: {candidate}"
         )
@@ -75,7 +75,10 @@ def find_chrome() -> Path:
         )
     for candidate in candidates:
         if candidate.is_file():
-            return candidate.resolve()
+            # Keep launcher symlinks intact. Ubuntu's /snap/bin/chromium points
+            # at the generic /usr/bin/snap multiplexer; resolving it would drop
+            # the required "chromium" application name and Snap exits with 64.
+            return candidate.absolute()
     raise BrowserHostError("Google Chrome executable was not found")
 
 
@@ -128,8 +131,12 @@ class ChromeHost:
         self.port = port
         self._lock = ProfileLock(self.state_dir / "profile.supervisor.lock")
 
-    def start_or_adopt(self, *, timeout: float = 15.0) -> BrowserDescriptor:
-        self.state_dir.mkdir(parents=True, exist_ok=True); self.profile_dir.mkdir(exist_ok=True)
+    def start_or_adopt(self, *, timeout: float = 30.0) -> BrowserDescriptor:
+        self.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.profile_dir.mkdir(mode=0o700, exist_ok=True)
+        if os.name != "nt":
+            self.state_dir.chmod(0o700)
+            self.profile_dir.chmod(0o700)
         self._lock.acquire()
         descriptor = self.read_descriptor()
         owned = self._refresh_owned_descriptor(descriptor) if descriptor else None
@@ -151,7 +158,7 @@ class ChromeHost:
                 "Chrome needs a graphical display. Start QasaWatch from a Linux "
                 "desktop session, or set DISPLAY for an X11/Xvfb session."
             )
-        chrome = (self.executable or find_chrome()).expanduser().resolve()
+        chrome = (self.executable or find_chrome()).expanduser().absolute()
         port = self.port or _free_loopback_port()
         token = uuid.uuid4().hex
         args = [str(chrome), f"--remote-debugging-port={port}", "--remote-debugging-address=127.0.0.1",
@@ -159,48 +166,56 @@ class ChromeHost:
         flags = 0
         if os.name == "nt":
             flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        stderr_fd, stderr_name = tempfile.mkstemp(
+            prefix="chrome-startup-", suffix=".log", dir=self.state_dir
+        )
+        stderr_path = Path(stderr_name)
         try:
-            process = subprocess.Popen(
-                args,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=True,
-                creationflags=flags,
-            )
-        except OSError as exc:
-            raise BrowserHostError(
-                f"Chrome could not be started from {chrome} ({type(exc).__name__})"
-            ) from exc
-        descriptor = BrowserDescriptor(process.pid, port, token, str(chrome), str(self.profile_dir.resolve()), time.time())
-        self._write_descriptor(descriptor)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            returncode = process.poll()
-            if self._cdp_healthy(port):
-                handed_off = self._refresh_owned_descriptor(descriptor)
-                if handed_off is not None and (
-                    returncode is None or handed_off.pid != process.pid
-                ):
-                    if handed_off != descriptor:
-                        self._write_descriptor(handed_off)
-                    return handed_off
-            if returncode is not None:
-                handed_off = self._refresh_owned_descriptor(descriptor)
-                if handed_off is not None:
-                    descriptor = handed_off
-                    self._write_descriptor(descriptor)
-                elif returncode != 0:
-                    raise BrowserHostError(
-                        f"Chrome exited during startup ({returncode}). Verify the "
-                        "Chrome installation and graphical display."
+            with os.fdopen(stderr_fd, "wb") as stderr:
+                try:
+                    process = subprocess.Popen(
+                        args,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=stderr,
+                        close_fds=True,
+                        creationflags=flags,
                     )
-                # Chrome on Windows can exit its launcher with code 0 before
-                # the long-lived browser process and CDP listener are visible.
-            time.sleep(0.1)
-        raise BrowserHostError("Chrome DevTools endpoint did not become ready")
+                except OSError as exc:
+                    raise BrowserHostError(
+                        f"Chrome could not be started from {chrome} "
+                        f"({type(exc).__name__})"
+                    ) from exc
+            descriptor = BrowserDescriptor(process.pid, port, token, str(chrome), str(self.profile_dir.resolve()), time.time())
+            self._write_descriptor(descriptor)
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                returncode = process.poll()
+                if self._cdp_healthy(port):
+                    handed_off = self._refresh_owned_descriptor(descriptor)
+                    if handed_off is not None and (
+                        returncode is None or handed_off.pid != process.pid
+                    ):
+                        if handed_off != descriptor:
+                            self._write_descriptor(handed_off)
+                        return handed_off
+                if returncode is not None:
+                    handed_off = self._refresh_owned_descriptor(descriptor)
+                    if handed_off is not None:
+                        descriptor = handed_off
+                        self._write_descriptor(descriptor)
+                    elif returncode != 0:
+                        raise BrowserHostError(
+                            _chrome_startup_error(returncode, stderr_path)
+                        )
+                    # Chrome on Windows can exit its launcher with code 0 before
+                    # the long-lived browser process and CDP listener are visible.
+                time.sleep(0.1)
+            raise BrowserHostError(_chrome_startup_error(None, stderr_path))
+        finally:
+            stderr_path.unlink(missing_ok=True)
 
-    def recover(self, *, timeout: float = 15.0) -> BrowserDescriptor:
+    def recover(self, *, timeout: float = 30.0) -> BrowserDescriptor:
         old = self.read_descriptor()
         owned = self._refresh_owned_descriptor(old) if old else None
         if owned:
@@ -300,11 +315,53 @@ def _free_loopback_port() -> int:
         sock.bind(("127.0.0.1", 0)); return int(sock.getsockname()[1])
 
 
+def _chrome_startup_error(returncode: int | None, stderr_path: Path) -> str:
+    try:
+        diagnostic = stderr_path.read_text(
+            encoding="utf-8", errors="replace"
+        )[-131_072:]
+    except OSError:
+        diagnostic = ""
+    lowered = diagnostic.lower()
+    if "no usable sandbox" in lowered:
+        return (
+            "Chrome's Linux sandbox is unavailable. Install Google Chrome or "
+            "Chromium through the operating system so its Ubuntu AppArmor "
+            "profile is installed, or ask the administrator to permit Chrome "
+            "user namespaces. Do not start QasaWatch with sudo."
+        )
+    if "missing x server" in lowered or "cannot open display" in lowered:
+        return (
+            "Chrome could not reach the graphical display. Start QasaWatch "
+            "from a Linux desktop session, or configure DISPLAY for X11/Xvfb."
+        )
+    if "error while loading shared libraries" in lowered:
+        return (
+            "Chrome is missing required Linux shared libraries. Install Chrome "
+            "or Chromium through the operating system and restart QasaWatch."
+        )
+    if returncode is None:
+        return (
+            "Chrome DevTools endpoint did not become ready. Verify the Chrome "
+            "installation and graphical display."
+        )
+    return (
+        f"Chrome exited during startup ({returncode}). Verify the Chrome "
+        "installation and graphical display."
+    )
+
+
 def _contains_exact_argument(
     command: str | Sequence[str], argument: str, *, ignore_case: bool = False
 ) -> bool:
     """Match one command-line argument, allowing platform-added quoting."""
     if not isinstance(command, str):
+        if len(command) == 1 and any(character.isspace() for character in command[0]):
+            # Snap Chromium can expose its rewritten browser command as one
+            # NUL-delimited /proc entry instead of conventional argv entries.
+            return _contains_exact_argument(
+                command[0], argument, ignore_case=ignore_case
+            )
         if ignore_case:
             expected = argument.casefold()
             return any(value.casefold() == expected for value in command)
