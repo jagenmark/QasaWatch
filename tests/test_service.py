@@ -45,6 +45,12 @@ class FailingOutput(Output):
         raise RuntimeError("Discord unavailable")
 
 
+class CapturingOutput(Output):
+    async def deliver(self, listing, *, idempotency_key):
+        self.calls.append(listing)
+        return DeliveryResult("sent")
+
+
 class MailSender:
     def __init__(self): self.calls = []
     async def send(self, recipients, subject, body):
@@ -115,6 +121,72 @@ async def test_manual_promotion_only_delivers_after_explicit_review(database):
     assert output.calls == []
     promoted = await service.promote_manual(PromotionRequest(manual_id=history_id, channels=["discord"]))
     assert promoted.listing_id is not None and len(output.calls) == 1
+
+
+async def test_manual_promotion_refreshes_stale_duplicate_with_reviewed_enrichment(database):
+    await Pipeline(database).process(
+        RawListing(
+            "qasa",
+            "https://qasa.com/home/manual-1",
+            "manual-1",
+            {
+                "rent": 9000,
+                "address": "Old watcher data",
+                "rental_start": "2026-07-01",
+                "availability": "until_further_notice",
+            },
+        )
+    )
+
+    class RichEnricher:
+        name = "rich-manual"
+
+        async def enrich(self, raw):
+            return EnrichedListing(
+                raw.provider,
+                raw.url,
+                raw.external_id,
+                {
+                    **raw.data,
+                    "address": "Reviewed address",
+                    "commutes": {
+                        "T-Centralen": {"status": "ok", "duration_seconds": 1200}
+                    },
+                    "demographics": {
+                        "area_level": "DeSO",
+                        "foreign_background_percent": 22.9,
+                    },
+                },
+            )
+
+    output = CapturingOutput()
+    service = AppService(
+        database,
+        FakeBrowser(),
+        Pipeline(database, enricher=RichEnricher(), outputs=[output]),
+    )
+    await service.save_config(WatcherConfig(safe_mode=False))
+    history_id, reviewed = await service.process_manual(
+        "https://qasa.com/home/manual-1"
+    )
+
+    promoted = await service.promote_manual(
+        PromotionRequest(manual_id=history_id, channels=["discord"])
+    )
+
+    assert reviewed.data["commutes"]["T-Centralen"]["duration_seconds"] == 1200
+    assert promoted.duplicate is True
+    assert len(output.calls) == 1
+    sent = output.calls[0]
+    assert sent.data["address"] == "Reviewed address"
+    assert sent.data["rental_start"] == "2026-07-01"
+    assert sent.data["availability"] == "until_further_notice"
+    assert sent.data["commutes"]["T-Centralen"]["duration_seconds"] == 1200
+    assert sent.data["demographics"]["foreign_background_percent"] == 22.9
+    async with database.sessions() as session:
+        durable = await session.get(Listing, promoted.listing_id)
+        assert durable.data["commutes"] == sent.data["commutes"]
+        assert durable.data["demographics"] == sent.data["demographics"]
 
 
 async def test_manual_email_promotion_sends_one_message_in_grouped_scan_mode(database):

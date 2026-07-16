@@ -1,18 +1,18 @@
 # Configuration and provider reference
 
-`WatcherConfig` is stored in SQLite under `watcher.config`. Use the dashboard or `PUT /api/config` with JSON shaped like [config.example.json](../config.example.json). It is not a file-import format. The dashboard preserves existing secret references; use the API for initial or changed `maps_api_secret_ref` values.
+`WatcherConfig` is stored in SQLite under `watcher.config`. Use the dashboard or `PUT /api/config` with JSON shaped like [config.example.json](../config.example.json). It is not a file-import format. The normal dashboard automatically uses the standard environment setting for each private connection; low-level `*_secret_ref` fields remain API compatibility controls only.
 
 ## Core fields
 
 | Field | Meaning |
 | --- | --- |
-| `enabled` | Enables scheduled scans. At least one destination is required when true; the second dashboard destination is optional. |
+| `enabled` | Enables scheduled scans. Commute destinations are optional. |
 | `safe_mode` | Blocks production outputs, promotion/retry delivery, grouped-batch resend, and test email. Watcher scans still parse, enrich, filter, and report run counts, but do not create watcher listings, deduplication history, or delivery records. A listing first seen in safe mode remains new when a later production scan sees it. Manual detail inspection keeps its separate review history. |
 | `qasa_results_url` | Exact HTTPS Qasa results URL. The supplied filtered URL is in the example config. |
 | `base_interval_minutes` / `jitter_minutes` | Cadence of 1-1440 minutes plus/minus 0-120 minutes. |
-| `destinations` | `label`, `address`, `commute_mode` (`arrival`/`departure`), and optional `maximum_commute_minutes`. |
+| `destinations` | Optional list of any length. Each item has `label`, `address`, `commute_mode` (`arrival`/`departure`), and optional `maximum_commute_minutes`. |
 | `filters` | Rent, rooms, area, commute, locations, keywords, availability, demographic limits, and tri-state listing-attribute requirements. |
-| `maps_api_secret_ref` | `env:` reference for the Google Maps key; Maps is used only when it and destinations are configured. |
+| `maps_api_secret_ref` | `env:` reference for the shared Google Maps key. Geocoding supports SCB matching; Routes is used only for configured commute destinations. |
 
 Databases upgraded from an older QasaWatch release may contain delivery rows
 marked `skipped` by the previous safe-mode behavior. Those legacy rows remain
@@ -33,7 +33,7 @@ dashboard with a readable message and do not overwrite the last valid settings.
 
 ## Google Maps
 
-Enable Geocoding API and Routes API in a dedicated Google Cloud project. Use a server key, restrict it to those APIs and, where egress is stable, the VM source IP. Apply quotas and budget alerts. Put the key in `QASAWATCH_GOOGLE_MAPS_API_KEY` and store only `env:QASAWATCH_GOOGLE_MAPS_API_KEY` in `maps_api_secret_ref`.
+Enable Geocoding API and Routes API in a dedicated Google Cloud project. Use a server key, restrict it to those APIs and, where egress is stable, the VM source IP. Apply quotas and budget alerts. Put the key in `QASAWATCH_GOOGLE_MAPS_API_KEY`; the normal dashboard selects it automatically.
 
 The runtime calls Geocoding and Routes Compute Route Matrix as needed. Do not put the key in URLs, logs, Sheets, or Discord. Google-derived storage/caching must comply with your agreement; unavailable routes/geocodes produce status diagnostics.
 
@@ -45,7 +45,15 @@ The concrete Sheets v4 client accepts the resolved secret as either compact serv
 
 ## Discord
 
-Create a webhook for a least-privilege channel. Store the URL in `QASAWATCH_DISCORD_WEBHOOK_URL` and persist only `env:QASAWATCH_DISCORD_WEBHOOK_URL` in `webhook_secret_ref`. The runtime sends a Swedish listing summary with rent, area, address, rooms, rental period, commute bullets, and available demographics. Mentions are disabled and the request carries an idempotency header. Keep safe mode on until the channel is verified.
+Create a webhook for a least-privilege channel. Store the URL in `QASAWATCH_DISCORD_WEBHOOK_URL`; the normal dashboard selects it automatically. The runtime sends a Swedish listing summary with rent, area, address, rooms, rental period, commute bullets, and available demographics. Mentions are disabled and the request carries an idempotency header. Keep safe mode on until the channel is verified.
+
+## Environment precedence
+
+At startup, an existing process or VM environment variable wins. The project
+`.env` file fills only missing values. The dashboard never overrides or
+redisplays private values. After changing either source, restart QasaWatch and
+use the dashboard connection test; a saved configuration flag alone is not
+proof that an external service accepts the credential.
 
 When available, the Discord summary also shows `Möblerat`/`Omöblerat`, a
 separate `Inflyttningsdatum`, and `Tillsvidare` for an open-ended rental period.
@@ -84,3 +92,14 @@ uv run python scripts/build_stockholm_scb.py
 ```
 
 The builder downloads SCB's DeSO 2025 WFS polygons for Stockholm County (`lanskod` `01`) and joins SCB table `FolkmDesoBakgrKon` (`TAB6571`) for reference year 2025. This covers Stockholm municipality and surrounding municipalities such as Solna, Sundbyberg and Sollentuna. It stores total population, foreign-background count and calculated share, area level, precision and source metadata in `data/scb/stockholm-deso-2025.geojson`. SCB applies Cell Key Method uncertainty to 2025 values, so the percentage is labelled approximate. Re-run the builder deliberately when adopting a newer compatible geography/statistics vintage, then update and verify `scb.vintage`.
+
+For nationwide coverage across all 21 counties, run:
+
+```sh
+uv run python scripts/build_sweden_scb.py
+```
+
+The national builder uses the same 2025 geography and statistics sources,
+batches the PxWeb requests, validates that all 21 counties are present, and
+writes `data/scb/sweden-deso-2025.geojson`. It uses the same dashboard field
+mapping as the Stockholm file.

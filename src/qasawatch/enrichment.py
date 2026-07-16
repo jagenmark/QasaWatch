@@ -288,6 +288,36 @@ def listing_coordinates(data: Mapping[str, Any]) -> Coordinates | None:
     return None
 
 
+class GeocodingEnricher:
+    """Resolve listing coordinates without calculating any commute routes."""
+
+    name = "geocoding"
+
+    def __init__(self, geocoder: Geocoder) -> None:
+        self.geocoder = geocoder
+
+    async def enrich(self, listing: RawListing) -> EnrichedListing:
+        data = dict(listing.data)
+        if listing_coordinates(data) is not None:
+            return EnrichedListing(
+                listing.provider, listing.url, listing.external_id, data
+            )
+        address = str(data.get("address") or data.get("street_address") or "")
+        result = await self.geocoder.geocode(address)
+        data["geocode"] = {
+            "status": result.status.value,
+            "formatted_address": result.formatted_address,
+            "candidates": result.candidates,
+            "diagnostic": result.diagnostic,
+        }
+        if result.coordinates is not None:
+            data["latitude"] = result.coordinates.latitude
+            data["longitude"] = result.coordinates.longitude
+        return EnrichedListing(
+            listing.provider, listing.url, listing.external_id, data
+        )
+
+
 class CommuteEnricher:
     name = "commute"
 

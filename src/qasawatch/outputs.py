@@ -154,6 +154,40 @@ class GoogleServiceAccountSheetsClient:
     def __repr__(self) -> str:
         return f"{type(self).__name__}(credentials=<redacted>)"
 
+    async def verify_connection(
+        self, spreadsheet_id: str, worksheet: str
+    ) -> dict[str, str]:
+        """Verify spreadsheet access and worksheet presence without writing."""
+
+        if not spreadsheet_id.strip() or not worksheet.strip():
+            raise ValueError("spreadsheet_id and worksheet are required")
+        metadata = await self._request(
+            "GET",
+            f"https://sheets.googleapis.com/v4/spreadsheets/{quote(spreadsheet_id, safe='')}",
+            query={
+                "fields": "properties.title,sheets.properties.title",
+                "includeGridData": "false",
+            },
+        )
+        if not isinstance(metadata, Mapping):
+            raise OutputError("Google Sheets returned invalid spreadsheet metadata")
+        sheets = metadata.get("sheets", [])
+        worksheet_titles = {
+            str(item.get("properties", {}).get("title"))
+            for item in sheets
+            if isinstance(item, Mapping)
+            and isinstance(item.get("properties"), Mapping)
+            and item["properties"].get("title")
+        }
+        if worksheet not in worksheet_titles:
+            raise OutputError("The configured Google Sheets worksheet was not found")
+        properties = metadata.get("properties", {})
+        title = properties.get("title") if isinstance(properties, Mapping) else None
+        return {
+            "spreadsheet": str(title or "Accessible spreadsheet"),
+            "worksheet": worksheet,
+        }
+
     async def contains_idempotency_key(
         self, spreadsheet_id: str, worksheet: str, key: str
     ) -> bool:

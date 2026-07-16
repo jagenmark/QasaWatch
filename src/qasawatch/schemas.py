@@ -131,13 +131,6 @@ class WatcherConfig(BaseModel):
     def valid_results_url(cls, value: str) -> str:
         return validate_qasa_url(value.strip())
 
-    @model_validator(mode="after")
-    def enabled_has_destinations(self) -> "WatcherConfig":
-        if self.enabled and not self.destinations:
-            raise ValueError("an enabled watcher requires at least one destination")
-        return self
-
-
 class ManualRequest(BaseModel):
     url: str
 

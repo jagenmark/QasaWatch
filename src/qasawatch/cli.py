@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -13,12 +14,17 @@ from urllib.request import Request, urlopen
 from .app import create_app
 from .browser import QasaBrowser
 from .browser_host import ChromeHost
-from .config import BootstrapSettings, ConfigStore
+from .config import BootstrapSettings, ConfigStore, load_env_file
 from .db import Database
 from .pipeline import Pipeline
 from .domain import DeliveryChannel, EnrichedListing, RawListing
 from .emailer import EmailMode, EmailOutput, SMTPConfig, SMTPProvider
-from .enrichment import CommuteEnricher, GoogleGeocoder, GoogleRoutesMatrix
+from .enrichment import (
+    CommuteEnricher,
+    GeocodingEnricher,
+    GoogleGeocoder,
+    GoogleRoutesMatrix,
+)
 from .filters import FilterChain, NumericRangeFilter, PredicateFilter
 from .outputs import (
     DiscordWebhookOutput,
@@ -141,6 +147,7 @@ def _filters(settings, destinations=()) -> FilterChain:
 
 
 def build_application(database_path: str | None = None):
+    load_env_file()
     settings = BootstrapSettings.from_env()
     database = Database(database_path or settings.database)
     state_dir = Path(database_path or settings.database).expanduser().resolve().parent / ".qasawatch"
@@ -159,13 +166,18 @@ def build_application(database_path: str | None = None):
             "maps_reference": config.maps_api_secret_ref,
             "scb": config.scb.model_dump(mode="json"),
         }
-        if config.maps_api_secret_ref and config.destinations:
+        maps_needed = bool(config.destinations or config.scb.data_path)
+        geocoder = routes = None
+        if config.maps_api_secret_ref and maps_needed:
             clients = maps_client_cache.get(config.maps_api_secret_ref)
             if clients is None:
                 key = _resolve(config.maps_api_secret_ref)
                 clients = GoogleGeocoder(key), GoogleRoutesMatrix(key)
                 maps_client_cache[config.maps_api_secret_ref] = clients
             geocoder, routes = clients
+        if geocoder is not None and config.scb.data_path and not config.destinations:
+            enrichers.append(GeocodingEnricher(geocoder))
+        if geocoder is not None and routes is not None and config.destinations:
             for time_kind in ("arrival", "departure"):
                 destinations = {
                     item.label: item.address
@@ -253,8 +265,7 @@ def build_application(database_path: str | None = None):
         return Pipeline(database, enricher=_CompositeEnricher(enrichers, cache_namespace=namespace), filters=_filters(config.filters, config.destinations), outputs=outputs)
     store = ConfigStore(database)
     async def email_tester(recipient):
-        from .schemas import WatcherConfig
-        config = WatcherConfig.model_validate(await store.get("watcher.config", {}))
+        config = await service.get_config()
         provider = pipeline_factory(config).outputs.get(DeliveryChannel.EMAIL)
         if provider is None: raise RuntimeError("email provider is not configured")
         if recipient and recipient not in provider.recipients:
@@ -265,7 +276,85 @@ def build_application(database_path: str | None = None):
                 subject_template=provider.subject_template,
             )
         return dict((await provider.send_test()).details)
-    service = AppService(database, browser, Pipeline(database), config_store=store, pipeline_factory=pipeline_factory, email_tester=email_tester)
+    async def discord_tester():
+        config = await service.get_config()
+        if not config.discord.webhook_secret_ref:
+            raise RuntimeError("Discord webhook is not configured")
+        response = await _WebhookClient().post(
+            _resolve(config.discord.webhook_secret_ref),
+            {
+                "content": "QasaWatch test: Discord notifications are connected.",
+                "allowed_mentions": {"parse": []},
+            },
+        )
+        return {
+            "message_id": response.get("id")
+            if isinstance(response, dict)
+            else None
+        }
+    async def maps_tester():
+        config = await service.get_config()
+        key = _resolve(config.maps_api_secret_ref)
+        if not key:
+            raise RuntimeError("Google Maps credentials are not available")
+        geocoder = GoogleGeocoder(key)
+        origin = await geocoder.geocode(
+            "Stockholm Centralstation, Stockholm, Sweden"
+        )
+        if origin.status.value != "ok" or origin.coordinates is None:
+            raise RuntimeError(
+                f"Google Maps geocoding test failed ({origin.status.value})"
+            )
+        result: dict[str, object] = {
+            "geocoding": "ok",
+            "routes": "not needed",
+        }
+        if config.destinations:
+            destination_config = config.destinations[0]
+            destination = await geocoder.geocode(destination_config.address)
+            if destination.status.value != "ok" or destination.coordinates is None:
+                raise RuntimeError(
+                    f"Google Maps destination geocoding failed ({destination.status.value})"
+                )
+            route_kwargs = (
+                {"arrival_time": datetime.now(UTC) + timedelta(hours=1)}
+                if destination_config.commute_mode == "arrival"
+                else {"departure_time": datetime.now(UTC) + timedelta(minutes=5)}
+            )
+            route = await GoogleRoutesMatrix(key).compute_route(
+                origin.coordinates,
+                destination.coordinates,
+                travel_mode="TRANSIT",
+                **route_kwargs,
+            )
+            if route.status.value != "ok":
+                raise RuntimeError(
+                    f"Google Maps routes test failed ({route.status.value})"
+                )
+            result["routes"] = "ok"
+            result["duration_seconds"] = route.duration_seconds
+        return result
+    async def sheets_tester():
+        config = await service.get_config()
+        credentials = _resolve(config.sheets.credentials_secret_ref)
+        if not credentials:
+            raise RuntimeError("Google Sheets credentials are not available")
+        client = GoogleServiceAccountSheetsClient(credentials)
+        return await client.verify_connection(
+            config.sheets.spreadsheet_id,
+            config.sheets.worksheet,
+        )
+    service = AppService(
+        database,
+        browser,
+        Pipeline(database),
+        config_store=store,
+        pipeline_factory=pipeline_factory,
+        email_tester=email_tester,
+        discord_tester=discord_tester,
+        maps_tester=maps_tester,
+        sheets_tester=sheets_tester,
+    )
     return create_app(service, start_scheduler=True)
 
 

@@ -1,91 +1,687 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>QasaWatch</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/static/style.css"></head><body>
-<header><h1>QasaWatch</h1><span class="pill">Watcher: {{ 'Running' if watcher.running else ('Enabled' if config.enabled else 'Disabled') }}</span><span class="pill">Scan lock: {{ 'OK' if watcher.lease_healthy else 'Problem' }}</span><span class="pill">Browser: {{ browser.status | title }}</span></header>
-<main>
-<section><h2>Schedule</h2><div class="schedule-facts"><p><span>Next scan</span><strong>{{ watcher.next_run_display or 'Not scheduled' }}</strong></p><p><span>Frequency</span><strong>Every {{ config.base_interval_minutes }} minutes</strong></p><p><span>Random variation</span><strong>Up to ±{{ config.jitter_minutes }} minutes</strong></p><p><span>Timezone</span><strong>Europe/Stockholm</strong></p></div>{% if watcher.last_error %}<p class="error">Latest scheduler error: {{ watcher.last_error }}</p>{% endif %}<form method="post" action="/api/run-now"><button>Run now</button></form></section>
-<section><h2>Manual listing review</h2><p>Processes the detail page without watcher dedup, output, or statistics. Promotion is a separate review action.</p><form method="post" action="/manual"><input name="url" type="url" required placeholder="https://qasa.com/.../home/..."><button>Inspect</button></form>
-{% if manual_error %}<p class="error">{{ manual_error }}</p>{% endif %}
-{% if manual_result %}<article><h3>{{ 'Promoted' if manual_promoted else ('Would pass' if manual_result.accepted else 'Would be rejected') }}</h3><p>Stage: {{ manual_result.stage }}</p><pre>{{ manual_result.data | tojson(indent=2) }}</pre>{% if manual_result.rejection_reasons %}<pre>{{ manual_result.rejection_reasons | tojson(indent=2) }}</pre>{% endif %}{% if not manual_promoted %}<form method="post" action="/manual/promote"><input type="hidden" name="manual_id" value="{{ manual_id }}"><label><input type="checkbox" name="sheets"> Sheets</label><label><input type="checkbox" name="discord"> Discord</label><label><input type="checkbox" name="email"> Email</label><button>Explicitly promote</button></form>{% endif %}</article>{% endif %}</section>
-<section><h2>Configuration</h2>{% if config_error %}<p class="error error-box">{{ config_error }}</p>{% endif %}<form method="post" action="/config" class="grid">
-<label><input type="checkbox" name="enabled" {% if config.enabled %}checked{% endif %}> Enabled</label><label><input type="checkbox" name="safe_mode" {% if config.safe_mode %}checked{% endif %}> Safe verification mode</label>
-<label>Exact Qasa results URL<input name="qasa_results_url" value="{{ config.qasa_results_url }}" required></label><label>Base interval<input name="base_interval_minutes" type="number" value="{{ config.base_interval_minutes }}"></label><label>Jitter<input name="jitter_minutes" type="number" value="{{ config.jitter_minutes }}"></label>
-<input type="hidden" name="destinations_json" value="{{ config.destinations | tojson | forceescape }}">
-{% for number in [1, 2] %}{% set destination = config.destinations[number - 1] if config.destinations|length >= number else {} %}
-<fieldset class="destination-card"><legend>Commute destination {{ number }}</legend>
-<label>Name<input name="destination_{{ number }}_label" value="{{ destination.get('label', '') }}" placeholder="{{ 'Enköping' if number == 1 else 'T-Centralen' }}"></label>
-<label>Address or station<input name="destination_{{ number }}_address" value="{{ destination.get('address', '') }}" placeholder="{{ 'Enköping centralstation' if number == 1 else 'T-Centralen, Stockholm' }}"></label>
-<label>08:00 means<select name="destination_{{ number }}_mode"><option value="arrival"{% if destination.get('commute_mode', 'arrival') == 'arrival' %} selected{% endif %}>Arrive by 08:00</option><option value="departure"{% if destination.get('commute_mode') == 'departure' %} selected{% endif %}>Depart at 08:00</option></select></label>
-<label>Maximum commute (minutes, optional)<input name="destination_{{ number }}_maximum" type="number" min="1" value="{{ destination.get('maximum_commute_minutes') or '' }}"></label>
-</fieldset>{% endfor %}
-<fieldset class="config-card"><legend>Filters</legend><div class="form-grid">
-<label>Minimum rent<input name="filter_minimum_rent" type="number" min="0" value="{{ config.filters.minimum_rent if config.filters.minimum_rent is not none else '' }}"></label>
-<label>Maximum rent<input name="filter_maximum_rent" type="number" min="0" value="{{ config.filters.maximum_rent if config.filters.maximum_rent is not none else '' }}"></label>
-<label>Minimum rooms<input name="filter_minimum_rooms" type="number" min="0" step="0.5" value="{{ config.filters.minimum_rooms if config.filters.minimum_rooms is not none else '' }}"></label>
-<label>Maximum rooms<input name="filter_maximum_rooms" type="number" min="0" step="0.5" value="{{ config.filters.maximum_rooms if config.filters.maximum_rooms is not none else '' }}"></label>
-<label>Minimum area (m²)<input name="filter_minimum_area" type="number" min="0" step="0.5" value="{{ config.filters.minimum_area if config.filters.minimum_area is not none else '' }}"></label>
-<label>Maximum area (m²)<input name="filter_maximum_area" type="number" min="0" step="0.5" value="{{ config.filters.maximum_area if config.filters.maximum_area is not none else '' }}"></label>
-<label>Maximum commute (minutes)<input name="filter_maximum_commute_minutes" type="number" min="1" value="{{ config.filters.maximum_commute_minutes if config.filters.maximum_commute_minutes is not none else '' }}"></label>
-<label>Available from<input name="filter_availability_from" type="date" value="{{ config.filters.availability_from or '' }}"></label>
-<label>Available no later than<input name="filter_availability_to" type="date" value="{{ config.filters.availability_to or '' }}"></label>
-<label>Minimum population<input name="filter_minimum_population" type="number" min="0" value="{{ config.filters.minimum_population if config.filters.minimum_population is not none else '' }}"></label>
-<label>Maximum population<input name="filter_maximum_population" type="number" min="0" value="{{ config.filters.maximum_population if config.filters.maximum_population is not none else '' }}"></label>
-<label>Maximum average age<input name="filter_maximum_average_age" type="number" min="0" step="0.1" value="{{ config.filters.maximum_average_age if config.filters.maximum_average_age is not none else '' }}"></label>
-</div>
-<label>Allowed locations <span class="hint">(comma or one per line)</span><textarea name="filter_allowed_locations">{{ config.filters.allowed_locations | join('\n') }}</textarea></label>
-<label>Excluded locations <span class="hint">(comma or one per line)</span><textarea name="filter_excluded_locations">{{ config.filters.excluded_locations | join('\n') }}</textarea></label>
-<label>Required keywords <span class="hint">(comma or one per line)</span><textarea name="filter_required_keywords">{{ config.filters.required_keywords | join('\n') }}</textarea></label>
-<label>Excluded keywords <span class="hint">(comma or one per line)</span><textarea name="filter_excluded_keywords">{{ config.filters.excluded_keywords | join('\n') }}</textarea></label>
-</fieldset>
-{% set attributes = config.filters.attribute_requirements %}
-<fieldset class="config-card"><legend>Listing attributes</legend><p>Choose whether each listing attribute is ignored, required, or forbidden.</p>
-{% for key, label in [('furnished', 'Furnished'), ('shared', 'Shared home'), ('pets_allowed', 'Pets allowed'), ('smoking_allowed', 'Smoking allowed'), ('wheelchair_accessible', 'Wheelchair accessible'), ('first_hand', 'First-hand contract'), ('student_home', 'Student home'), ('senior_home', 'Senior home'), ('instant_sign', 'Instant sign'), ('corporate_home', 'Corporate home')] %}
-<label>{{ label }}<select name="attribute_{{ key }}"><option value="ignore"{% if key not in attributes %} selected{% endif %}>Ignore</option><option value="true"{% if attributes.get(key) is sameas true %} selected{% endif %}>Require yes</option><option value="false"{% if attributes.get(key) is sameas false %} selected{% endif %}>Require no</option></select></label>
-{% endfor %}</fieldset>
-<fieldset class="config-card"><legend>Google Sheets</legend>
-<label><input type="checkbox" name="sheets_enabled" {% if config.sheets.enabled %}checked{% endif %}> Enable Google Sheets output</label>
-<label>Spreadsheet ID<input name="sheets_spreadsheet_id" value="{{ config.sheets.spreadsheet_id }}"></label>
-<label>Worksheet<input name="sheets_worksheet" value="{{ config.sheets.worksheet }}"></label>
-<label>Credential reference<input type="password" name="sheets_credentials_secret_ref" placeholder="env:QASAWATCH_GOOGLE_SERVICE_ACCOUNT_JSON"></label>
-</fieldset>
-<fieldset class="config-card"><legend>Discord</legend>
-<label><input type="checkbox" name="discord_enabled" {% if config.discord.enabled %}checked{% endif %}> Enable Discord notifications</label>
-<label>Webhook reference<input type="password" name="discord_webhook_secret_ref" placeholder="env:QASAWATCH_DISCORD_WEBHOOK_URL"></label>
-<p class="hint">The webhook value stays in the environment and is never redisplayed.</p>
-</fieldset>
-<fieldset class="config-card wide"><legend>Email notifications</legend><div class="form-grid">
-<label><input type="checkbox" name="email_enabled" {% if config.email.enabled %}checked{% endif %}> Enable email notifications</label>
-<label>Delivery style<select name="email_delivery_mode"><option value="grouped"{% if config.email.grouped %} selected{% endif %}>One grouped email per scan</option><option value="per_listing"{% if config.email.per_listing %} selected{% endif %}>One email per listing</option></select></label>
-<label>Recipients <span class="hint">(comma or one per line)</span><textarea name="email_recipients">{{ config.email.recipients | join('\n') }}</textarea></label>
-<label>Sender email<input name="email_sender" type="email" value="{{ config.email.sender }}"></label>
-<label>SMTP host<input name="email_smtp_host" value="{{ config.email.smtp_host }}"></label>
-<label>SMTP port<input name="email_smtp_port" type="number" min="1" max="65535" value="{{ config.email.smtp_port }}"></label>
-<label>Security<select name="email_smtp_mode"><option value="starttls"{% if config.email.smtp_mode == 'starttls' %} selected{% endif %}>STARTTLS (usually port 587)</option><option value="tls"{% if config.email.smtp_mode == 'tls' %} selected{% endif %}>TLS/SSL (usually port 465)</option><option value="plain"{% if config.email.smtp_mode == 'plain' %} selected{% endif %}>Plain (trusted local relay only)</option></select></label>
-<label>SMTP username<input name="email_smtp_username" value="" placeholder="{{ 'Configured — enter to replace' if config.email.username_configured else 'Leave blank to use sender email' }}"></label>
-<label><input type="checkbox" name="email_clear_smtp_username"> Clear saved SMTP username and use sender email</label>
-<label>SMTP password reference<input type="password" name="smtp_secret_ref" placeholder="env:QASAWATCH_SMTP_PASSWORD"></label>
-<label>Subject template<input name="email_subject" value="{{ config.email.subject }}"></label>
-<label><input type="checkbox" name="email_send_no_new" {% if config.email.send_no_new %}checked{% endif %}> Send an email when no new listing is accepted</label>
-</div></fieldset>
-<fieldset class="config-card"><legend>SCB demographics</legend>
-<label>Dataset path<input name="scb_data_path" value="{{ config.scb.data_path }}"></label>
-<label>Area ID column<input name="scb_id_column" value="{{ config.scb.id_column }}"></label>
-<label>Area name column<input name="scb_name_column" value="{{ config.scb.name_column }}"></label>
-<label>Vintage/year<input name="scb_vintage" value="{{ config.scb.vintage }}"></label>
-<label>Coordinate system<input name="scb_crs" value="{{ config.scb.crs }}"></label>
-</fieldset>
-<fieldset class="config-card"><legend>Google Maps</legend><label>API key reference<input type="password" name="maps_api_secret_ref" placeholder="env:QASAWATCH_GOOGLE_MAPS_API_KEY"></label><p class="hint">One key can be restricted to both Geocoding API and Routes API.</p></fieldset>
-<details class="advanced wide"><summary>Advanced JSON controls</summary><p>Optional power-user controls for bulk edits, unusual SCB mappings, and future fields. The normal controls above take precedence.</p><div class="form-grid">
-<label>Filters JSON<textarea name="filters_json">{{ config.filters | tojson }}</textarea></label>
-<label>Sheets JSON<textarea name="sheets_json">{{ config.sheets | tojson }}</textarea></label>
-<label>Discord JSON<textarea name="discord_json">{{ config.discord | tojson }}</textarea></label>
-<label>Email JSON<textarea name="email_json">{{ config.email | tojson }}</textarea></label>
-<label>SCB path/mapping JSON<textarea name="scb_json">{{ config.scb | tojson }}</textarea></label>
-</div></details>
-<button class="primary wide">Save configuration</button></form><p>Credential values and references are never redisplayed. Status only: Maps {{ config.maps_secret_configured }}, Sheets {{ config.sheets.secret_configured }}, Discord {{ config.discord.secret_configured }}, SMTP {{ config.email.secret_configured }}.</p></section>
-<section><h2>Email</h2><p>{{ 'Enabled' if email.enabled else 'Disabled' }} · Recipients: {{ email.recipients | join(', ') or 'none' }} · Pending/retry/review: {{ email.pending }} · Latest batch: {{ email.latest or 'none' }} · Latest test: {{ email.latest_test or 'none' }}</p><form method="post" action="/test-email"><input type="email" name="recipient" placeholder="optional override recipient"><button>Send test email</button></form>{% for batch in email.batches %}<p>Batch #{{ batch.id }} · {{ batch.state }} · {{ batch.recipients | join(', ') }} · attempts {{ batch.attempts }}{% if batch.state in ['pending', 'retryable'] %} <form method="post" action="/api/email-batches/{{ batch.id }}/retry"><button>Retry batch</button></form>{% endif %}{% if batch.state == 'manual_review' %} · SMTP outcome is ambiguous: verify externally. <form method="post" action="/api/email-batches/{{ batch.id }}/resolve?delivered=true"><button>Mark delivered</button></form><form method="post" action="/api/email-batches/{{ batch.id }}/resolve?delivered=false"><button>Mark not delivered / retryable</button></form>{% endif %}</p>{% endfor %}</section>
-<section><h2>Recent runs</h2><table><tr><th>ID</th><th>Status</th><th>Started</th><th>Stats</th><th>Error</th></tr>{% for run in runs %}<tr id="run-{{ run.id }}"><td>{{ run.id }}</td><td>{{ run.status }}</td><td>{{ run.started_at }}</td><td>{{ run.stats }}</td><td>{{ run.error or '' }}</td></tr>{% endfor %}</table></section>
-<section><h2>Recent listings and output states</h2>{% for item in listings %}<article><a href="{{ item.url }}">{{ item.data.get('address', item.external_id or item.id) }}</a> · {{ item.stage }} · {% for d in item.deliveries %}{{ d.channel }}={{ d.state }} {% if d.state == 'manual_review' %}<form method="post" action="/api/listings/{{ item.id }}/deliveries/{{ d.channel }}/resolve?delivered=true"><button>Mark delivered</button></form><form method="post" action="/api/listings/{{ item.id }}/deliveries/{{ d.channel }}/resolve?delivered=false"><button>Mark not delivered</button></form>{% endif %}{% endfor %}{% if item.rejection_reasons %}<pre>{{ item.rejection_reasons | tojson }}</pre>{% endif %}</article>{% endfor %}</section>
-<section><h2>Recent error history</h2><p>Up to the 30 most recent processing and delivery errors. Times are UTC; use the run ID to match an error to the scan above.</p>{% if errors %}<div class="table-scroll"><table><tr><th>Occurred (UTC)</th><th>Run</th><th>Listing</th><th>Operation</th><th>Type</th><th>Message</th></tr>{% for error in errors %}<tr><td>{{ error.created_at.isoformat(sep=' ', timespec='seconds') }}</td><td>{% if error.run_id %}<a href="#run-{{ error.run_id }}">#{{ error.run_id }}</a>{% else %}—{% endif %}</td><td>{{ '#' ~ error.listing_id if error.listing_id else '—' }}</td><td>{{ error.operation }}</td><td>{{ error.error_type }}</td><td class="error">{{ error.message }}</td></tr>{% endfor %}</table></div>{% else %}<p>No processing errors have been recorded.</p>{% endif %}</section>
-<section><h2>Manual history</h2>{% for item in manual %}<article><p>#{{ item.id }} {{ item.status }} {{ item.input_data.get('url', '') }} → {{ item.result.get('stage', '') }}</p>{% if item.result %}<pre>{{ item.result | tojson(indent=2) }}</pre>{% endif %}</article>{% endfor %}</section>
-</main></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QasaWatch</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/style.css?v=20260716-7">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <div>
+        <p class="eyebrow">QasaWatch</p>
+        <h1>Your home search</h1>
+        <p class="header-copy">Checks Qasa for matching homes and lets you know when something new appears.</p>
+      </div>
+      <div class="header-status" aria-label="Monitoring status">
+        <span class="status-badge {{ 'status-success' if watcher.running else ('status-warning' if config.enabled else 'status-neutral') }}">
+          Monitoring: {{ 'Active' if watcher.running else ('Ready' if config.enabled else 'Paused') }}
+        </span>
+        {% if config.safe_mode %}
+        <span class="status-badge status-warning">Preview mode</span>
+        {% endif %}
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <p class="time-note">All times are shown in Europe/Stockholm.</p>
+
+    <section class="panel panel-featured" aria-labelledby="automatic-checks-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Monitoring</p>
+          <h2 id="automatic-checks-heading">Automatic checks</h2>
+          <p>QasaWatch checks your saved search on this schedule.</p>
+        </div>
+        <form method="post" action="/api/run-now" id="run-now-form">
+          <button class="button-secondary" id="run-now-button">Check now</button>
+        </form>
+      </div>
+
+      <dl class="fact-grid">
+        <div>
+          <dt>Next check</dt>
+          <dd>{{ watcher.next_run_display or 'Not scheduled' }}</dd>
+        </div>
+        <div>
+          <dt>Check every</dt>
+          <dd>{{ config.base_interval_minutes }} minutes</dd>
+        </div>
+        <div>
+          <dt>Timing variation</dt>
+          <dd>Up to ±{{ config.jitter_minutes }} minutes</dd>
+        </div>
+      </dl>
+
+      <details class="details-box">
+        <summary>System details</summary>
+        <dl class="detail-list">
+          <div>
+            <dt>Check coordination</dt>
+            <dd>{{ 'Working normally' if watcher.lease_healthy else 'Needs attention' }}</dd>
+          </div>
+          <div>
+            <dt>Page reader</dt>
+            <dd>{{ browser.status | replace('_', ' ') | title }}</dd>
+          </div>
+          {% if browser.checked_display %}
+          <div>
+            <dt>Last checked</dt>
+            <dd>{{ browser.checked_display }}</dd>
+          </div>
+          {% endif %}
+        </dl>
+        {% if watcher.last_error %}
+        <div class="notice notice-error">
+          <strong>Automatic checking needs attention.</strong>
+          <span>{{ watcher.last_error }}</span>
+        </div>
+        {% endif %}
+      </details>
+    </section>
+
+    <section class="panel connections-panel" aria-labelledby="connections-heading">
+      <div class="section-heading compact-heading">
+        <div>
+          <p class="eyebrow">Connections</p>
+          <h2 id="connections-heading">Service status</h2>
+          <p>The services used for travel times, notifications, and saving results.</p>
+        </div>
+      </div>
+      <div class="service-grid">
+        <div class="service-status">
+          <div><strong>Google Maps</strong><span>Coordinates for demographics and commute times</span></div>
+          <span class="status-badge status-{{ connections.maps.status_tone }}">{{ connections.maps.status_label }}</span>
+        </div>
+        <div class="service-status">
+          <div><strong>Discord</strong><span>Listing notifications</span></div>
+          <span class="status-badge status-{{ connections.discord.status_tone }}">{{ connections.discord.status_label }}</span>
+        </div>
+        <div class="service-status">
+          <div><strong>Google Sheets</strong><span>Saved listing history</span></div>
+          <span class="status-badge status-{{ connections.sheets.status_tone }}">{{ connections.sheets.status_label }}</span>
+        </div>
+        <div class="service-status">
+          <div><strong>Email</strong><span>Email notifications</span></div>
+          <span class="status-badge status-{{ connections.email.status_tone }}">{{ connections.email.status_label }}</span>
+        </div>
+      </div>
+      <details class="details-box connection-priority">
+        <summary>How private connection details are loaded</summary>
+        <p>QasaWatch reads each service from its standard setting in the project’s <code>.env</code> file. If the VM or terminal already provides the same setting, that value wins and the <code>.env</code> value is ignored. The dashboard never replaces or displays either value.</p>
+        <dl class="plain-definition-list">
+          <div><dt>Google Maps</dt><dd><code>QASAWATCH_GOOGLE_MAPS_API_KEY</code></dd></div>
+          <div><dt>Google Sheets</dt><dd><code>QASAWATCH_GOOGLE_SERVICE_ACCOUNT_JSON</code></dd></div>
+          <div><dt>Discord</dt><dd><code>QASAWATCH_DISCORD_WEBHOOK_URL</code></dd></div>
+          <div><dt>Email password</dt><dd><code>QASAWATCH_SMTP_PASSWORD</code></dd></div>
+        </dl>
+        <p>Restart QasaWatch after editing <code>.env</code>, then use the connection tests below.</p>
+      </details>
+      <div class="connection-actions">
+        <button type="submit" form="test-maps-form" class="button-secondary" {% if not connections.maps.can_test %}disabled{% endif %}>Test Google Maps</button>
+        <button type="submit" form="test-sheets-form" class="button-secondary" {% if not connections.sheets.can_test %}disabled{% endif %}>Test Google Sheets</button>
+      </div>
+      {% for connection in [connections.maps, connections.sheets] %}
+        {% if connection.latest_test %}
+        <p class="notice notice-{{ 'error' if connection.latest_test.status == 'failed' else 'success' }}">
+          {{ connection.name }}: {{ connection.latest_test.status_label }}{% if connection.latest_test.at_display %} · {{ connection.latest_test.at_display }}{% endif %}
+          {% if connection.latest_test.message %}<span>{{ connection.latest_test.message }}</span>{% endif %}
+        </p>
+        {% endif %}
+      {% endfor %}
+    </section>
+
+    <section class="panel" aria-labelledby="one-listing-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">One-off check</p>
+          <h2 id="one-listing-heading">Check one listing</h2>
+          <p>Paste a Qasa listing link to see whether it matches your settings. This does not add or send it unless you choose to afterward.</p>
+        </div>
+      </div>
+
+      <form method="post" action="/manual" class="inline-form">
+        <label class="grow">
+          <span>Qasa listing link</span>
+          <input name="url" type="url" required placeholder="https://qasa.com/.../home/...">
+        </label>
+        <button>Check listing</button>
+      </form>
+
+      {% if manual_error %}
+      <div class="notice notice-error">{{ manual_error }}</div>
+      {% endif %}
+
+      {% if manual_result %}
+      <article class="result-card">
+        <div>
+          <p class="eyebrow">Result</p>
+          <h3>{{ 'Added and sent' if manual_promoted else ('Matches your search' if manual_result.accepted else 'Does not match your search') }}</h3>
+        </div>
+        {% if not manual_promoted %}
+        <form method="post" action="/manual/promote" class="promotion-form">
+          <input type="hidden" name="manual_id" value="{{ manual_id }}">
+          <fieldset>
+            <legend>Add this listing and send it to</legend>
+            <div class="check-row">
+              <label><input type="checkbox" name="sheets"> Google Sheets</label>
+              <label><input type="checkbox" name="discord"> Discord</label>
+              <label><input type="checkbox" name="email"> Email</label>
+            </div>
+          </fieldset>
+          <button>Add and send</button>
+        </form>
+        {% endif %}
+        <details class="details-box">
+          <summary>Listing details and reasons</summary>
+          <p><strong>Processing result:</strong> {{ manual_result.stage | replace('_', ' ') | title }}</p>
+          <pre>{{ manual_result.data | tojson(indent=2) }}</pre>
+          {% if manual_result.rejection_reasons %}
+          <pre>{{ manual_result.rejection_reasons | tojson(indent=2) }}</pre>
+          {% endif %}
+        </details>
+      </article>
+      {% endif %}
+    </section>
+
+    <section class="panel" aria-labelledby="settings-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Preferences</p>
+          <h2 id="settings-heading">Search settings</h2>
+          <p>Choose where to search, what should match, and how you want to be notified.</p>
+        </div>
+      </div>
+
+      {% if config_error %}
+      <div class="notice notice-error">{{ config_error }}</div>
+      {% endif %}
+
+      <form method="post" action="/config" class="settings-form">
+        <fieldset class="settings-group">
+          <legend>Monitoring and schedule</legend>
+          <div class="toggle-stack">
+            <label class="toggle-option">
+              <input type="checkbox" name="enabled" {% if config.enabled %}checked{% endif %}>
+              <span><strong>Automatic monitoring</strong><small>Check Qasa regularly using the settings below.</small></span>
+            </label>
+            <label class="toggle-option">
+              <input type="checkbox" name="safe_mode" {% if config.safe_mode %}checked{% endif %}>
+              <span><strong>Preview mode</strong><small>Check what would match without saving listings or sending notifications.</small></span>
+            </label>
+          </div>
+          <div class="form-grid">
+            <label class="wide">
+              <span>Qasa search results link</span>
+              <input name="qasa_results_url" type="url" value="{{ config.qasa_results_url }}" required>
+            </label>
+            <label>
+              <span>Check every (minutes)</span>
+              <input name="base_interval_minutes" type="number" value="{{ config.base_interval_minutes }}">
+            </label>
+            <label>
+              <span>Timing variation (minutes)</span>
+              <input name="jitter_minutes" type="number" value="{{ config.jitter_minutes }}">
+            </label>
+          </div>
+        </fieldset>
+
+        <input type="hidden" name="destinations_json" id="destinations-json" value="{{ config.destinations | tojson | forceescape }}">
+        <fieldset class="settings-group">
+          <legend>Optional commute destinations</legend>
+          <p class="group-intro">Add places when you want travel times included. Leave this empty if commute information is not useful to you.</p>
+          <div class="destination-list" id="commute-destinations">
+            {% for destination in config.destinations %}
+            <fieldset class="sub-card destination-card">
+              <div class="sub-card-heading">
+                <strong class="destination-title">Destination {{ loop.index }}</strong>
+                <button type="button" class="button-small button-quiet remove-destination">Remove</button>
+              </div>
+              <label><span>Name</span><input data-destination-field="label" value="{{ destination.get('label', '') }}" placeholder="Work, school, T-Centralen…"></label>
+              <label><span>Address or station</span><input data-destination-field="address" value="{{ destination.get('address', '') }}" placeholder="T-Centralen, Stockholm"></label>
+              <label>
+                <span>Journey timing</span>
+                <select data-destination-field="commute_mode">
+                  <option value="arrival"{% if destination.get('commute_mode', 'arrival') == 'arrival' %} selected{% endif %}>Arrive by 08:00</option>
+                  <option value="departure"{% if destination.get('commute_mode') == 'departure' %} selected{% endif %}>Leave at 08:00</option>
+                </select>
+              </label>
+              <label><span>Maximum journey (minutes, optional)</span><input data-destination-field="maximum_commute_minutes" type="number" min="1" value="{{ destination.get('maximum_commute_minutes') or '' }}"></label>
+            </fieldset>
+            {% endfor %}
+            {% if not config.destinations %}
+            <fieldset class="sub-card destination-card">
+              <div class="sub-card-heading"><strong class="destination-title">Destination 1</strong><button type="button" class="button-small button-quiet remove-destination">Remove</button></div>
+              <label><span>Name</span><input data-destination-field="label" placeholder="Work, school, T-Centralen…"></label>
+              <label><span>Address or station</span><input data-destination-field="address" placeholder="T-Centralen, Stockholm"></label>
+              <label><span>Journey timing</span><select data-destination-field="commute_mode"><option value="arrival">Arrive by 08:00</option><option value="departure">Leave at 08:00</option></select></label>
+              <label><span>Maximum journey (minutes, optional)</span><input data-destination-field="maximum_commute_minutes" type="number" min="1"></label>
+            </fieldset>
+            {% endif %}
+          </div>
+          <button type="button" class="button-secondary add-destination" id="add-commute-destination">Add another commute destination</button>
+          <p class="help-text">Destinations are optional. Google Maps may still be used to locate listings for SCB demographics when Qasa does not provide coordinates.</p>
+        </fieldset>
+
+        <template id="commute-destination-template">
+          <fieldset class="sub-card destination-card">
+            <div class="sub-card-heading"><strong class="destination-title">Destination</strong><button type="button" class="button-small button-quiet remove-destination">Remove</button></div>
+            <label><span>Name</span><input data-destination-field="label" placeholder="Work, school, T-Centralen…"></label>
+            <label><span>Address or station</span><input data-destination-field="address" placeholder="T-Centralen, Stockholm"></label>
+            <label><span>Journey timing</span><select data-destination-field="commute_mode"><option value="arrival">Arrive by 08:00</option><option value="departure">Leave at 08:00</option></select></label>
+            <label><span>Maximum journey (minutes, optional)</span><input data-destination-field="maximum_commute_minutes" type="number" min="1"></label>
+          </fieldset>
+        </template>
+
+        <fieldset class="settings-group">
+          <legend>Home and area</legend>
+          <div class="form-grid">
+            <label><span>Minimum rent</span><input name="filter_minimum_rent" type="number" min="0" value="{{ config.filters.minimum_rent if config.filters.minimum_rent is not none else '' }}"></label>
+            <label><span>Maximum rent</span><input name="filter_maximum_rent" type="number" min="0" value="{{ config.filters.maximum_rent if config.filters.maximum_rent is not none else '' }}"></label>
+            <label><span>Minimum rooms</span><input name="filter_minimum_rooms" type="number" min="0" step="0.5" value="{{ config.filters.minimum_rooms if config.filters.minimum_rooms is not none else '' }}"></label>
+            <label><span>Maximum rooms</span><input name="filter_maximum_rooms" type="number" min="0" step="0.5" value="{{ config.filters.maximum_rooms if config.filters.maximum_rooms is not none else '' }}"></label>
+            <label><span>Minimum area (m²)</span><input name="filter_minimum_area" type="number" min="0" step="0.5" value="{{ config.filters.minimum_area if config.filters.minimum_area is not none else '' }}"></label>
+            <label><span>Maximum area (m²)</span><input name="filter_maximum_area" type="number" min="0" step="0.5" value="{{ config.filters.maximum_area if config.filters.maximum_area is not none else '' }}"></label>
+            <label><span>Longest commute (minutes)</span><input name="filter_maximum_commute_minutes" type="number" min="1" value="{{ config.filters.maximum_commute_minutes if config.filters.maximum_commute_minutes is not none else '' }}"></label>
+            <label><span>Available from</span><input name="filter_availability_from" type="date" value="{{ config.filters.availability_from or '' }}"></label>
+            <label><span>Available by</span><input name="filter_availability_to" type="date" value="{{ config.filters.availability_to or '' }}"></label>
+            <label><span>Minimum local population</span><input name="filter_minimum_population" type="number" min="0" value="{{ config.filters.minimum_population if config.filters.minimum_population is not none else '' }}"></label>
+            <label><span>Maximum local population</span><input name="filter_maximum_population" type="number" min="0" value="{{ config.filters.maximum_population if config.filters.maximum_population is not none else '' }}"></label>
+            <label><span>Maximum average age nearby</span><input name="filter_maximum_average_age" type="number" min="0" step="0.1" value="{{ config.filters.maximum_average_age if config.filters.maximum_average_age is not none else '' }}"></label>
+            <label class="wide"><span>Allowed locations <small>Comma-separated or one per line</small></span><textarea name="filter_allowed_locations">{{ config.filters.allowed_locations | join('\n') }}</textarea></label>
+            <label class="wide"><span>Excluded locations <small>Comma-separated or one per line</small></span><textarea name="filter_excluded_locations">{{ config.filters.excluded_locations | join('\n') }}</textarea></label>
+            <label class="wide"><span>Words that must appear <small>Comma-separated or one per line</small></span><textarea name="filter_required_keywords">{{ config.filters.required_keywords | join('\n') }}</textarea></label>
+            <label class="wide"><span>Words to exclude <small>Comma-separated or one per line</small></span><textarea name="filter_excluded_keywords">{{ config.filters.excluded_keywords | join('\n') }}</textarea></label>
+          </div>
+        </fieldset>
+
+        {% set attributes = config.filters.attribute_requirements %}
+        <fieldset class="settings-group">
+          <legend>Listing preferences</legend>
+          <p class="group-intro">Choose Any when a feature should not affect the match.</p>
+          <div class="preference-grid">
+            {% for key, label in [('furnished', 'Furnished'), ('shared', 'Shared home'), ('pets_allowed', 'Pets allowed'), ('smoking_allowed', 'Smoking allowed'), ('wheelchair_accessible', 'Wheelchair accessible'), ('first_hand', 'First-hand contract'), ('student_home', 'Student home'), ('senior_home', 'Senior home'), ('instant_sign', 'Instant sign'), ('corporate_home', 'Corporate home')] %}
+            <label>
+              <span>{{ label }}</span>
+              <select name="attribute_{{ key }}">
+                <option value="ignore"{% if key not in attributes %} selected{% endif %}>Any</option>
+                <option value="true"{% if attributes.get(key) is sameas true %} selected{% endif %}>Yes</option>
+                <option value="false"{% if attributes.get(key) is sameas false %} selected{% endif %}>No</option>
+              </select>
+            </label>
+            {% endfor %}
+          </div>
+        </fieldset>
+
+        <fieldset class="settings-group">
+          <legend>Notifications and saving</legend>
+          <div class="channel-grid">
+            <div class="channel-card" id="sheets-settings">
+              <label class="toggle-option">
+                <input type="checkbox" name="sheets_enabled" {% if config.sheets.enabled %}checked{% endif %}>
+                <span><strong>Save to Google Sheets</strong><small>Keep matching homes in your spreadsheet.</small></span>
+              </label>
+              <label><span>Worksheet name</span><input name="sheets_worksheet" value="{{ config.sheets.worksheet }}"></label>
+              <details class="details-box">
+                <summary>Google Sheets connection</summary>
+                <label><span>Spreadsheet ID</span><input name="sheets_spreadsheet_id" value="{{ config.sheets.spreadsheet_id }}"></label>
+                <div class="connection-summary">
+                  <span class="status-badge status-{{ connections.sheets.status_tone }}">{{ connections.sheets.status_label }}</span>
+                  <span>{{ connections.sheets.message }}</span>
+                </div>
+                <p class="help-text">Credentials are loaded privately from the running environment. The test reads spreadsheet information and never adds a row.</p>
+              </details>
+            </div>
+
+            <div class="channel-card" id="discord-settings">
+              <label class="toggle-option">
+                <input type="checkbox" name="discord_enabled" {% if config.discord.enabled %}checked{% endif %}>
+                <span><strong>Send Discord notifications</strong><small>Post matching homes to your Discord channel.</small></span>
+              </label>
+              <div class="connection-summary">
+                <span class="status-badge status-{{ connections.discord.status_tone }}">{{ connections.discord.status_label }}</span>
+                <span>{{ connections.discord.message }}</span>
+              </div>
+              <p class="help-text">The webhook stays in the running environment and is never shown or stored in the dashboard.</p>
+              <button type="submit" form="test-discord-form" class="button-secondary" {% if not connections.discord.can_test %}disabled{% endif %}>Send test message</button>
+              {% if discord.latest_test %}
+              <p class="notice notice-{{ 'error' if discord.latest_test.status == 'failed' else 'success' }}">
+                {{ discord.latest_test.status_label }}{% if discord.latest_test.at_display %} · {{ discord.latest_test.at_display }}{% endif %}
+                {% if discord.latest_test.message %}<span>{{ discord.latest_test.message }}</span>{% endif %}
+              </p>
+              {% endif %}
+            </div>
+
+            <div class="channel-card channel-card-wide">
+              {% set email_provider = 'gmail' if config.email.smtp_host in ['', 'smtp.gmail.com'] else 'custom' %}
+              <label class="toggle-option">
+                <input type="checkbox" name="email_enabled" {% if config.email.enabled %}checked{% endif %}>
+                <span><strong>Send email notifications</strong><small>Email matching homes to the people below.</small></span>
+              </label>
+              <div class="form-grid">
+                <label class="wide"><span>Recipients <small>Comma-separated or one per line</small></span><textarea name="email_recipients">{{ config.email.recipients | join('\n') }}</textarea></label>
+                <label><span>Sender email</span><input name="email_sender" type="email" value="{{ config.email.sender }}"></label>
+                <label>
+                  <span>Email provider</span>
+                  <select name="email_provider" id="email-provider">
+                    <option value="gmail"{% if email_provider == 'gmail' %} selected{% endif %}>Gmail — easiest setup</option>
+                    <option value="custom"{% if email_provider == 'custom' %} selected{% endif %}>Another provider</option>
+                  </select>
+                </label>
+                <label>
+                  <span>How to group messages</span>
+                  <select name="email_delivery_mode">
+                    <option value="grouped"{% if config.email.grouped %} selected{% endif %}>One email for each check</option>
+                    <option value="per_listing"{% if config.email.per_listing %} selected{% endif %}>One email for each home</option>
+                  </select>
+                </label>
+                <label class="wide"><input type="checkbox" name="email_send_no_new" {% if config.email.send_no_new %}checked{% endif %}> Email me even when there are no new matches</label>
+              </div>
+              <div class="setup-callout" id="gmail-email-help">
+                <strong>Gmail setup</strong>
+                <ol>
+                  <li>Use an existing Gmail address as the sender. It can also be a recipient.</li>
+                  <li>Turn on 2-Step Verification for that Google account.</li>
+                  <li>Create a Google App Password named “QasaWatch”.</li>
+                  <li>Provide that 16-character password as <code>QASAWATCH_SMTP_PASSWORD</code>. For local use, put it in <code>.env</code>. Restart QasaWatch, then use “Test email” below.</li>
+                </ol>
+                <p><a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">Open Google App Passwords</a></p>
+              </div>
+              <details class="details-box" id="custom-email-settings">
+                <summary>Advanced email settings and wording</summary>
+                <div class="form-grid">
+                  <label><span>Mail server</span><input name="email_smtp_host" value="{{ config.email.smtp_host }}"></label>
+                  <label><span>Port</span><input name="email_smtp_port" type="number" min="1" max="65535" value="{{ config.email.smtp_port }}"></label>
+                  <label>
+                    <span>Connection security</span>
+                    <select name="email_smtp_mode">
+                      <option value="starttls"{% if config.email.smtp_mode == 'starttls' %} selected{% endif %}>STARTTLS (usually port 587)</option>
+                      <option value="tls"{% if config.email.smtp_mode == 'tls' %} selected{% endif %}>TLS/SSL (usually port 465)</option>
+                      <option value="plain"{% if config.email.smtp_mode == 'plain' %} selected{% endif %}>No encryption (local server only)</option>
+                    </select>
+                  </label>
+                  <label><span>Account username</span><input name="email_smtp_username" value="" placeholder="{{ 'Configured — enter to replace' if config.email.username_configured else 'Leave blank to use sender email' }}"></label>
+                  <label class="wide"><input type="checkbox" name="email_clear_smtp_username"> Remove the saved username and use the sender email</label>
+                  <label><span>Email subject</span><input name="email_subject" value="{{ config.email.subject }}"></label>
+                </div>
+                <p class="help-text">The email password is loaded privately from the running environment. It cannot be entered or displayed here.</p>
+              </details>
+            </div>
+          </div>
+        </fieldset>
+
+        <details class="details-box settings-group">
+          <summary>Location data and map connection</summary>
+          <div class="form-grid details-content">
+            <label><span>Local data file</span><input name="scb_data_path" value="{{ config.scb.data_path }}"></label>
+            <label><span>Area ID column</span><input name="scb_id_column" value="{{ config.scb.id_column }}"></label>
+            <label><span>Area name column</span><input name="scb_name_column" value="{{ config.scb.name_column }}"></label>
+            <label><span>Data year</span><input name="scb_vintage" value="{{ config.scb.vintage }}"></label>
+            <label><span>Coordinate system</span><input name="scb_crs" value="{{ config.scb.crs }}"></label>
+            <div class="connection-summary wide">
+              <span class="status-badge status-{{ connections.maps.status_tone }}">{{ connections.maps.status_label }}</span>
+              <span>{{ connections.maps.message }}</span>
+            </div>
+            <p class="help-text wide">The Google Maps key is loaded privately from the running environment. The connection test checks geocoding and also checks routes when you have a commute destination.</p>
+          </div>
+        </details>
+
+        <details class="details-box settings-group">
+          <summary>Advanced JSON controls</summary>
+          <p class="help-text">For bulk edits and unusual setups. The normal settings above take priority.</p>
+          <div class="form-grid">
+            <label><span>Search filters</span><textarea name="filters_json">{{ config.filters | tojson }}</textarea></label>
+            <label><span>Google Sheets</span><textarea name="sheets_json">{{ config.sheets | tojson }}</textarea></label>
+            <label><span>Discord</span><textarea name="discord_json">{{ config.discord | tojson }}</textarea></label>
+            <label><span>Email</span><textarea name="email_json">{{ config.email | tojson }}</textarea></label>
+            <label><span>Location data</span><textarea name="scb_json">{{ config.scb | tojson }}</textarea></label>
+          </div>
+        </details>
+
+        <div class="save-bar">
+          <p>Private connection details are loaded from the environment and are never shown in the dashboard.</p>
+          <button class="button-primary">Save settings</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel" aria-labelledby="email-tools-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Delivery check</p>
+          <h2 id="email-tools-heading">Test email</h2>
+          <p>Send a test to your saved recipients, or enter another address for this test only.</p>
+        </div>
+        <span class="status-badge {{ 'status-success' if email.enabled else 'status-neutral' }}">{{ 'Email enabled' if email.enabled else 'Email paused' }}</span>
+      </div>
+      <form method="post" action="/test-email" class="inline-form">
+        <label class="grow">
+          <span>Different recipient (optional)</span>
+          <input type="email" name="recipient" placeholder="name@example.com">
+        </label>
+        <button>Send test email</button>
+      </form>
+      {% if email.latest_test_display or email.latest_test %}
+      <p class="help-text">
+        Last test:
+        {% if email.latest_test_display %}
+          <span data-status="{{ email.latest_test.status }}">{{ email.latest_test_display }}</span>
+        {% elif email.latest_test.status_label or email.latest_test.at_display %}
+          <span data-status="{{ email.latest_test.status }}">{{ email.latest_test.status_label }}</span>{% if email.latest_test.at_display %} · {{ email.latest_test.at_display }}{% endif %}
+        {% else %}
+          {{ email.latest_test }}
+        {% endif %}
+      </p>
+      {% if email.latest_test.message %}
+      <p class="notice notice-{{ 'danger' if email.latest_test.status == 'failed' else 'warning' }}">{{ email.latest_test.message }}</p>
+      {% endif %}
+      {% endif %}
+      <details class="details-box">
+        <summary>Email delivery details{% if email.pending %} ({{ email.pending }} needs attention){% endif %}</summary>
+        <dl class="detail-list">
+          <div><dt>Recipients</dt><dd>{{ email.recipients | join(', ') or 'None saved' }}</dd></div>
+          <div>
+            <dt>Last delivery</dt>
+            <dd>
+              {% if email.latest_display %}
+                {{ email.latest_display }}
+              {% elif email.latest %}
+                {{ email.latest.state_label or (email.latest.state | replace('_', ' ') | title) }}{% if email.latest.sent_display %} · {{ email.latest.sent_display }}{% endif %}
+              {% else %}
+                No deliveries yet
+              {% endif %}
+            </dd>
+          </div>
+        </dl>
+        {% for batch in email.batches %}
+        <article class="compact-row">
+          <div>
+            <strong>{{ batch.state_label }}</strong>
+            <span>{{ batch.sent_display or 'Not sent' }} · {{ batch.recipients | join(', ') }} · {{ batch.attempts }} attempt{{ '' if batch.attempts == 1 else 's' }}</span>
+          </div>
+          <div class="action-row">
+            {% if batch.state in ['pending', 'retryable'] %}
+            <form method="post" action="/api/email-batches/{{ batch.id }}/retry"><button class="button-small">Try again</button></form>
+            {% endif %}
+            {% if batch.state == 'manual_review' %}
+            <form method="post" action="/api/email-batches/{{ batch.id }}/resolve?delivered=true"><button class="button-small">Mark delivered</button></form>
+            <form method="post" action="/api/email-batches/{{ batch.id }}/resolve?delivered=false"><button class="button-small button-quiet">Mark not delivered</button></form>
+            {% endif %}
+          </div>
+        </article>
+        {% endfor %}
+      </details>
+    </section>
+
+    <section class="panel" aria-labelledby="activity-heading">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">What happened</p>
+          <h2 id="activity-heading">Recent activity</h2>
+          <p>Your latest checks, matching homes, and anything that needs attention.</p>
+        </div>
+      </div>
+
+      <h3 class="subheading">Latest checks</h3>
+      {% if run_views %}
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Started</th>
+              <th>Result</th>
+              <th>Found</th>
+              <th>New</th>
+              <th>Matched</th>
+              <th>Filtered out</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for run in run_views %}
+            <tr id="run-{{ run.id }}">
+              <td>{{ run.started_display or '—' }}</td>
+              <td>
+                <span class="status-badge status-{{ run.status_tone }}">{{ run.status_label }}</span>
+                {% if run.error %}
+                <details class="inline-details">
+                  <summary>What went wrong</summary>
+                  <p>{{ run.error }}</p>
+                </details>
+                {% endif %}
+              </td>
+              <td>{{ run.stats.get('found', run.stats.get('discovered', 0) + run.stats.get('duplicates', 0)) }}</td>
+              <td>{{ run.stats.get('new', run.stats.get('discovered', 0)) }}</td>
+              <td>{{ run.stats.get('accepted', 0) }}</td>
+              <td>{{ run.stats.get('rejected', 0) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="empty-state">No checks have run yet.</p>
+      {% endif %}
+
+      <h3 class="subheading">Latest homes</h3>
+      {% if listing_views %}
+      <div class="listing-list">
+        {% for item in listing_views %}
+        <article class="listing-row">
+          <div>
+            <a class="listing-link" href="{{ item.url }}">{{ item.address }}</a>
+            <span class="cell-note">{{ item.discovered_display }} · {{ item.stage_label }}</span>
+          </div>
+          {% if item.deliveries or item.rejection_reasons %}
+          <details class="details-box compact-details">
+            <summary>Delivery and match details</summary>
+            {% for d in item.deliveries %}
+            <div class="compact-row">
+              <span>{{ d.channel_label }}: {{ d.state_label }}</span>
+              {% if d.state == 'manual_review' %}
+              <div class="action-row">
+                <form method="post" action="/api/listings/{{ item.id }}/deliveries/{{ d.channel }}/resolve?delivered=true"><button class="button-small">Mark delivered</button></form>
+                <form method="post" action="/api/listings/{{ item.id }}/deliveries/{{ d.channel }}/resolve?delivered=false"><button class="button-small button-quiet">Mark not delivered</button></form>
+              </div>
+              {% endif %}
+            </div>
+            {% endfor %}
+            {% if item.rejection_reasons %}<pre>{{ item.rejection_reasons | tojson }}</pre>{% endif %}
+          </details>
+          {% endif %}
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="empty-state">No homes have been checked yet.</p>
+      {% endif %}
+
+      <details class="details-box activity-details">
+        <summary>Problems and troubleshooting{% if error_views %} ({{ error_views | length }}){% endif %}</summary>
+        {% if error_views %}
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>When</th><th>Message</th><th>Technical details</th></tr></thead>
+            <tbody>
+              {% for error in error_views %}
+              <tr>
+                <td>{{ error.occurred_display }}</td>
+                <td class="error-text">{{ error.message }}</td>
+                <td>
+                  <details class="inline-details">
+                    <summary>Show</summary>
+                    <dl class="detail-list">
+                      <div>
+                        <dt>Check</dt>
+                        <dd>{% if error.run_id %}<a href="#run-{{ error.run_id }}">{{ error.run_id }}</a>{% else %}—{% endif %}</dd>
+                      </div>
+                      <div><dt>Listing</dt><dd>{{ error.listing_id or '—' }}</dd></div>
+                      <div><dt>Operation</dt><dd>{{ error.operation }}</dd></div>
+                      <div><dt>Type</dt><dd>{{ error.error_type }}</dd></div>
+                    </dl>
+                  </details>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="empty-state">No recent problems.</p>
+        {% endif %}
+      </details>
+
+      <details class="details-box activity-details">
+        <summary>One-off check history</summary>
+        {% if manual_views %}
+        {% for item in manual_views %}
+        <article class="compact-row">
+          <div>
+            <a href="{{ item.url }}">{{ item.url }}</a>
+            <span>{{ item.requested_display }} · {{ item.status_label }}</span>
+          </div>
+          {% if item.result %}
+          <details class="inline-details"><summary>Raw result</summary><pre>{{ item.result | tojson(indent=2) }}</pre></details>
+          {% endif %}
+        </article>
+        {% endfor %}
+        {% else %}
+        <p class="empty-state">No one-off checks yet.</p>
+        {% endif %}
+      </details>
+
+    </section>
+  </main>
+
+  <form id="test-maps-form" method="post" action="/test-maps" hidden></form>
+  <form id="test-sheets-form" method="post" action="/test-sheets" hidden></form>
+  <form id="test-discord-form" method="post" action="/test-discord" hidden></form>
+
+  <dialog class="result-dialog" id="run-result-dialog" aria-labelledby="run-result-title">
+    <div class="dialog-heading">
+      <div>
+        <p class="eyebrow">Check result</p>
+        <h2 id="run-result-title">Checking Qasa…</h2>
+      </div>
+      <button type="button" class="dialog-close" data-close-dialog aria-label="Close">×</button>
+    </div>
+    <p id="run-result-message" class="dialog-message" aria-live="polite">
+      This can take a moment while the saved search is loaded.
+    </p>
+    <dl class="result-grid" id="run-result-counts" hidden>
+      <div><dt>Listings found</dt><dd id="run-result-found">0</dd></div>
+      <div><dt>New listings</dt><dd id="run-result-new">0</dd></div>
+      <div><dt>Matched</dt><dd id="run-result-accepted">0</dd></div>
+      <div><dt>Filtered out</dt><dd id="run-result-rejected">0</dd></div>
+    </dl>
+    <div class="dialog-actions">
+      <button type="button" class="button-secondary" data-close-dialog>Close</button>
+      <button type="button" id="refresh-after-run" hidden>Refresh activity</button>
+    </div>
+  </dialog>
+
+  <script src="/static/dashboard.js?v=20260716-7" defer></script>
+</body>
+</html>

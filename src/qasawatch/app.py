@@ -74,6 +74,7 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
         state = await service.dashboard()
         return {
             "watcher": state["watcher"], "browser": state["browser"],
+            "connections": state["connections"],
             "email": state["email"], "recent_runs": [_run_json(item) for item in state["runs"]],
         }
 
@@ -93,18 +94,6 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
         destinations_json: str = Form("[]"), filters_json: str = Form("{}"),
         sheets_json: str = Form("{}"), discord_json: str = Form("{}"),
         email_json: str = Form("{}"), scb_json: str = Form("{}"), safe_mode: bool = Form(False),
-        maps_api_secret_ref: str = Form(""),
-        sheets_credentials_secret_ref: str = Form(""),
-        discord_webhook_secret_ref: str = Form(""),
-        smtp_secret_ref: str = Form(""),
-        destination_1_label: str | None = Form(None),
-        destination_1_address: str | None = Form(None),
-        destination_1_mode: str | None = Form(None),
-        destination_1_maximum: str | None = Form(None),
-        destination_2_label: str | None = Form(None),
-        destination_2_address: str | None = Form(None),
-        destination_2_mode: str | None = Form(None),
-        destination_2_maximum: str | None = Form(None),
         attribute_furnished: str | None = Form(None),
         attribute_shared: str | None = Form(None),
         attribute_pets_allowed: str | None = Form(None),
@@ -138,6 +127,7 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
         email_enabled: bool = Form(False),
         email_recipients: str | None = Form(None),
         email_sender: str | None = Form(None),
+        email_provider: str | None = Form(None),
         email_smtp_mode: str | None = Form(None),
         email_smtp_host: str | None = Form(None),
         email_smtp_port: str | None = Form(None),
@@ -159,28 +149,37 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
                 **existing.sheets.model_dump(),
                 **_json_object(sheets_json, "Sheets"),
             }
+            sheets["credentials_secret_ref"] = (
+                existing.sheets.credentials_secret_ref
+            )
             discord = {
                 **existing.discord.model_dump(),
                 **_json_object(discord_json, "Discord"),
             }
+            discord["webhook_secret_ref"] = (
+                existing.discord.webhook_secret_ref
+            )
             email = {
                 **existing.email.model_dump(),
                 **_json_object(email_json, "Email"),
             }
-            if sheets_credentials_secret_ref.strip():
-                sheets["credentials_secret_ref"] = sheets_credentials_secret_ref.strip()
-            if discord_webhook_secret_ref.strip():
-                discord["webhook_secret_ref"] = discord_webhook_secret_ref.strip()
-            if smtp_secret_ref.strip():
-                email["smtp_secret_ref"] = smtp_secret_ref.strip()
+            email["smtp_secret_ref"] = existing.email.smtp_secret_ref
             if sheets_spreadsheet_id is not None:
                 sheets.update({
                     "enabled": sheets_enabled,
                     "spreadsheet_id": sheets_spreadsheet_id.strip(),
                     "worksheet": (sheets_worksheet or "Listings").strip() or "Listings",
                 })
-            if discord_enabled or discord_webhook_secret_ref or "enabled" in discord:
+                if sheets_enabled:
+                    sheets["credentials_secret_ref"] = (
+                        "env:QASAWATCH_GOOGLE_SERVICE_ACCOUNT_JSON"
+                    )
+            if discord_enabled or "enabled" in discord:
                 discord["enabled"] = discord_enabled
+                if discord_enabled:
+                    discord["webhook_secret_ref"] = (
+                        "env:QASAWATCH_DISCORD_WEBHOOK_URL"
+                    )
             if email_sender is not None:
                 recipients = [
                     item.strip()
@@ -188,48 +187,67 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
                     if item.strip()
                 ] if email_recipients is not None else []
                 delivery_mode = (email_delivery_mode or "grouped").strip()
+                provider = (email_provider or "custom").strip().lower()
+                if provider not in {"gmail", "custom"}:
+                    raise ValueError("Choose Gmail or custom email setup")
+                sender = email_sender.strip()
+                smtp_host = (email_smtp_host or "").strip()
+                smtp_port = int((email_smtp_port or "587").strip())
+                smtp_mode = (email_smtp_mode or "starttls").strip()
+                smtp_username = (
+                    (email_smtp_username or "").strip()
+                    or (
+                        None
+                        if email_clear_smtp_username
+                        else existing.email.smtp_username
+                    )
+                )
+                if provider == "gmail":
+                    smtp_host = "smtp.gmail.com"
+                    smtp_port = 587
+                    smtp_mode = "starttls"
+                    smtp_username = sender or None
+                    if not email.get("smtp_secret_ref"):
+                        email["smtp_secret_ref"] = "env:QASAWATCH_SMTP_PASSWORD"
                 email.update({
                     "enabled": email_enabled,
                     "recipients": recipients,
-                    "sender": email_sender.strip(),
-                    "smtp_mode": (email_smtp_mode or "starttls").strip(),
-                    "smtp_host": (email_smtp_host or "").strip(),
-                    "smtp_port": int((email_smtp_port or "587").strip()),
-                    "smtp_username": (
-                        (email_smtp_username or "").strip()
-                        or (
-                            None
-                            if email_clear_smtp_username
-                            else existing.email.smtp_username
-                        )
-                    ),
+                    "sender": sender,
+                    "smtp_mode": smtp_mode,
+                    "smtp_host": smtp_host,
+                    "smtp_port": smtp_port,
+                    "smtp_username": smtp_username,
                     "grouped": delivery_mode == "grouped",
                     "per_listing": delivery_mode == "per_listing",
                     "send_no_new": email_send_no_new,
                     "subject": (email_subject or "").strip() or "QasaWatch: {count} new listings",
                 })
-            destination_controls = (
-                (destination_1_label, destination_1_address, destination_1_mode, destination_1_maximum),
-                (destination_2_label, destination_2_address, destination_2_mode, destination_2_maximum),
-            )
-            if any(value is not None for row in destination_controls for value in row):
-                destinations = []
-                for index, (label, address, mode, maximum) in enumerate(destination_controls, 1):
-                    label = (label or "").strip()
-                    address = (address or "").strip()
-                    maximum = (maximum or "").strip()
-                    if not address:
-                        if label or maximum:
-                            raise ValueError(f"Destination {index} needs an address")
-                        continue
-                    destinations.append({
-                        "label": label or f"Destination {index}",
-                        "address": address,
-                        "commute_mode": (mode or "arrival").strip().lower(),
-                        "maximum_commute_minutes": int(maximum) if maximum else None,
-                    })
-            else:
-                destinations = json.loads(destinations_json)
+                if email_enabled:
+                    email["smtp_secret_ref"] = "env:QASAWATCH_SMTP_PASSWORD"
+            raw_destinations = json.loads(destinations_json)
+            if not isinstance(raw_destinations, list):
+                raise ValueError("Commute destinations must be a list")
+            destinations = []
+            for index, item in enumerate(raw_destinations, 1):
+                if not isinstance(item, dict):
+                    raise ValueError(f"Commute destination {index} is invalid")
+                label = str(item.get("label") or "").strip()
+                address = str(item.get("address") or "").strip()
+                maximum = str(item.get("maximum_commute_minutes") or "").strip()
+                if not any((label, address, maximum)):
+                    continue
+                if not address:
+                    raise ValueError(
+                        f"Commute destination {index} needs an address or station"
+                    )
+                destinations.append({
+                    "label": label or f"Destination {index}",
+                    "address": address,
+                    "commute_mode": str(
+                        item.get("commute_mode") or "arrival"
+                    ).strip().lower(),
+                    "maximum_commute_minutes": int(maximum) if maximum else None,
+                })
             filters = _json_object(filters_json, "Filters")
             filter_controls = {
                 "minimum_rent": (filter_minimum_rent, int),
@@ -302,8 +320,9 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
                 destinations=destinations, filters=filters,
                 sheets=sheets, discord=discord, email=email, scb=scb, safe_mode=safe_mode,
                 maps_api_secret_ref=(
-                    maps_api_secret_ref.strip()
-                    or existing.maps_api_secret_ref
+                    "env:QASAWATCH_GOOGLE_MAPS_API_KEY"
+                    if destinations or scb.get("data_path")
+                    else existing.maps_api_secret_ref
                 ),
             )
         except (ValueError, json.JSONDecodeError, ValidationError) as exc:
@@ -404,6 +423,21 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
     async def test_email_form(recipient: str | None = Form(None)):
         await service.test_email(recipient or None)
         return RedirectResponse("/", status_code=303)
+
+    @app.post("/test-discord")
+    async def test_discord_form():
+        await service.test_discord()
+        return RedirectResponse("/#discord-settings", status_code=303)
+
+    @app.post("/test-maps")
+    async def test_maps_form():
+        await service.test_maps()
+        return RedirectResponse("/#connections-heading", status_code=303)
+
+    @app.post("/test-sheets")
+    async def test_sheets_form():
+        await service.test_sheets()
+        return RedirectResponse("/#sheets-settings", status_code=303)
 
     @app.post("/api/email-batches/{batch_id}/retry")
     async def retry_email_batch(batch_id: int):

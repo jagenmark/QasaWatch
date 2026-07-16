@@ -5,8 +5,8 @@ import pytest
 
 from qasawatch.domain import RawListing
 from qasawatch.enrichment import (
-    CommuteEnricher, Coordinates, GeocodeResult, GeocodeStatus, RouteResult,
-    RouteStatus, next_weekday_at_0800,
+    CommuteEnricher, Coordinates, GeocodeResult, GeocodeStatus,
+    GeocodingEnricher, RouteResult, RouteStatus, next_weekday_at_0800,
 )
 
 TZ = ZoneInfo("Europe/Stockholm")
@@ -29,6 +29,38 @@ class Routes:
 def test_next_weekday_calendar():
     assert next_weekday_at_0800(datetime(2026, 7, 17, 9, tzinfo=TZ)) == datetime(2026, 7, 20, 8, tzinfo=TZ)
     assert next_weekday_at_0800(datetime(2026, 7, 20, 7, tzinfo=TZ)) == datetime(2026, 7, 20, 8, tzinfo=TZ)
+
+
+@pytest.mark.asyncio
+async def test_geocoding_enricher_supports_scb_without_commute_destinations():
+    geocoder = Geocoder()
+    result = await GeocodingEnricher(geocoder).enrich(
+        RawListing(
+            "qasa",
+            "https://x",
+            data={"address": "Sveavägen 1, Stockholm"},
+        )
+    )
+
+    assert geocoder.calls == ["Sveavägen 1, Stockholm"]
+    assert result.data["latitude"] == 59.3
+    assert result.data["longitude"] == 18.0
+    assert result.data["geocode"]["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_geocoding_enricher_reuses_qasa_coordinates_without_api_call():
+    geocoder = Geocoder()
+    result = await GeocodingEnricher(geocoder).enrich(
+        RawListing(
+            "qasa",
+            "https://x",
+            data={"latitude": 59.2, "longitude": 18.1},
+        )
+    )
+
+    assert geocoder.calls == []
+    assert result.data["latitude"] == 59.2
 
 
 @pytest.mark.asyncio

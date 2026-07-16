@@ -231,6 +231,79 @@ class Pipeline:
             result = replace(result, manual_history_id=history_id)
         return result
 
+    async def promote_enriched(
+        self,
+        raw: RawListing,
+        *,
+        options: ProcessingOptions | None = None,
+    ) -> ProcessingResult:
+        """Promote the exact enriched payload reviewed during a manual check.
+
+        An older watcher record may already exist for the same Qasa listing.
+        Refresh that durable record with the reviewed data before delivery so
+        outputs cannot silently fall back to stale, partially enriched fields.
+        """
+
+        opts = options or ProcessingOptions()
+        natural_key = self.natural_key(raw)
+        async with self.database.sessions() as session:
+            existing = await session.scalar(
+                select(Listing).where(Listing.natural_key == natural_key)
+            )
+        effective_data = {
+            **(dict(existing.data) if existing is not None else {}),
+            **dict(raw.data),
+        }
+        raw = RawListing(
+            raw.provider, raw.url, raw.external_id, effective_data
+        )
+        enriched = EnrichedListing(
+            raw.provider, raw.url, raw.external_id, dict(raw.data)
+        )
+        decision = await self.filters.evaluate(enriched)
+        stage = ListingStage.ACCEPTED if decision.accepted else ListingStage.REJECTED
+        reasons = [
+            {
+                "code": reason.code,
+                "message": reason.message,
+                "source": reason.source.value,
+                "rule": reason.rule,
+                "details": dict(reason.details),
+            }
+            for reason in decision.reasons
+        ]
+        listing_id, duplicate = await self._discover(
+            raw, run_id=None, options=opts
+        )
+        now = utcnow()
+        async with self.database.sessions.begin() as session:
+            await session.execute(
+                update(Listing)
+                .where(Listing.id == listing_id)
+                .values(
+                    provider=raw.provider,
+                    url=raw.url,
+                    external_id=raw.external_id,
+                    data=dict(raw.data),
+                    content_hash=self.content_hash(raw.data),
+                    stage=stage.value,
+                    rejection_reasons=reasons,
+                    enriched_at=now,
+                    decided_at=now,
+                    updated_at=now,
+                )
+            )
+
+        resumed = await self.resume(listing_id, options=opts)
+        return ProcessingResult(
+            listing_id=listing_id,
+            stage=stage,
+            duplicate=duplicate,
+            decision=decision,
+            data=dict(raw.data),
+            delivery_failures=resumed.delivery_failures,
+        )
+
     async def resume(
         self,
         listing_id: int,

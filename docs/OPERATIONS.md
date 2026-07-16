@@ -66,8 +66,8 @@ watching and invoke manual processing.
    from the supplied exact filtered URL in `config.example.json`, then copy a
    newly chosen URL if filters change.
 3. Save configuration from [config.example.json](../config.example.json) with
-   real (or controlled test) values. It must have at least one destination before an
-   enabled watcher will validate.
+   real (or controlled test) values. Commute destinations and Google Maps are
+   optional; an enabled watcher can run without either.
 4. Keep `enabled: false` and `safe_mode: true`; use a manual listing inspection
    and a scan to verify parsing and browser readiness. No output should be sent.
    The 2026-07-14 live verification of the supplied URL, using a persistent
