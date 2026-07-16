@@ -315,9 +315,20 @@ class AppService:
             if not host_running:
                 browser_state["last_page_status"] = browser_state.get("status")
                 browser_state["status"] = "stopped"
+        next_run = await self.scheduler.next_run() if self.scheduler else None
         return {
             "config": await self.public_config(),
-            "watcher": {"running": bool(self.scheduler and self.scheduler.running), "lease_healthy": bool(not self.scheduler or self.scheduler.lease_healthy), "last_error": self.scheduler.last_error if self.scheduler else None, "next_run": (await self.scheduler.next_run()).isoformat() if self.scheduler and await self.scheduler.next_run() else None},
+            "watcher": {
+                "running": bool(self.scheduler and self.scheduler.running),
+                "lease_healthy": bool(not self.scheduler or self.scheduler.lease_healthy),
+                "last_error": self.scheduler.last_error if self.scheduler else None,
+                "next_run": next_run.isoformat() if next_run else None,
+                "next_run_display": (
+                    next_run.strftime("%A, %d %B %Y at %H:%M")
+                    if next_run
+                    else None
+                ),
+            },
             "browser": browser_state,
             "runs": runs, "listings": listings, "errors": errors, "manual": manual,
             "email": {

@@ -317,3 +317,26 @@ async def test_dashboard_error_history_includes_time_and_run_link(tmp_path):
     assert f'href="#run-{run_id}"' in response.text
     assert "route API unavailable" in response.text
     await db.dispose()
+
+
+async def test_dashboard_formats_schedule_for_humans_and_renames_scan_lock(tmp_path):
+    db = Database(tmp_path / "schedule-display.db")
+    await db.initialize()
+    service = AppService(db, NoBrowser(), Pipeline(db))
+    app = create_app(service)
+    await service.config_store.set_value(
+        "scheduler.next_run",
+        "2026-07-16T11:44:07.808025+02:00",
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/")
+
+    assert response.status_code == 200
+    assert "Thursday, 16 July 2026 at 11:44" in response.text
+    assert "2026-07-16T11:44:07.808025+02:00" not in response.text
+    assert "Scan lock: OK" in response.text
+    assert "Lease healthy" not in response.text
+    await db.dispose()
