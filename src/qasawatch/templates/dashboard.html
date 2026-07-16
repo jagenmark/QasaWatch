@@ -159,21 +159,48 @@
       <article class="result-card">
         <div>
           <p class="eyebrow">Result</p>
-          <h3>{{ 'Added and sent' if manual_promoted else ('Matches your search' if manual_result.accepted else 'Does not match your search') }}</h3>
+          {% set promotion_outcomes = manual_result.delivery_statuses.values() | map(attribute='outcome') | list if manual_result.delivery_statuses else [] %}
+          <h3>
+            {% if manual_promoted and (manual_result.delivery_failures or 'failed' in promotion_outcomes or 'manual_review' in promotion_outcomes or 'not_configured' in promotion_outcomes or 'skipped' in promotion_outcomes) %}
+              Listing saved, but a notification needs attention
+            {% elif manual_promoted and promotion_outcomes and promotion_outcomes | unique | list == ['already_sent'] %}
+              This listing was already sent earlier
+            {% elif manual_promoted %}
+              Listing saved and selected notifications processed
+            {% elif manual_result.accepted %}
+              Matches your search
+            {% else %}
+              Does not match your search
+            {% endif %}
+          </h3>
         </div>
         {% if not manual_promoted %}
         <form method="post" action="/manual/promote" class="promotion-form">
           <input type="hidden" name="manual_id" value="{{ manual_id }}">
           <fieldset>
-            <legend>Add this listing and send it to</legend>
+            <legend>Send this listing to</legend>
             <div class="check-row">
               <label><input type="checkbox" name="sheets"> Google Sheets</label>
               <label><input type="checkbox" name="discord"> Discord</label>
               <label><input type="checkbox" name="email"> Email</label>
             </div>
           </fieldset>
-          <button>Add and send</button>
+          <button>Send selected notifications</button>
+          <p class="help-text">This is an explicit manual send. It sends again even if the same listing was sent previously.</p>
         </form>
+        {% endif %}
+        {% if manual_result.delivery_statuses %}
+        <div class="delivery-result-list" aria-label="Notification results">
+          {% for channel, delivery in manual_result.delivery_statuses.items() %}
+          <div class="delivery-result">
+            <strong>{{ {'discord': 'Discord', 'sheets': 'Google Sheets', 'email': 'Email'}.get(channel, channel | title) }}</strong>
+            <span class="status-badge status-{{ 'success' if delivery.outcome in ['sent', 'already_sent'] else 'danger' if delivery.outcome in ['failed', 'manual_review'] else 'warning' }}">
+              {{ {'sent': 'Sent now', 'already_sent': 'Already sent', 'failed': 'Failed', 'manual_review': 'Check required', 'pending': 'Pending', 'not_configured': 'Not configured', 'skipped': 'Not sent'}.get(delivery.outcome, delivery.outcome | replace('_', ' ') | title) }}
+            </span>
+            {% if delivery.message %}<span>{{ delivery.message }}</span>{% endif %}
+          </div>
+          {% endfor %}
+        </div>
         {% endif %}
         <details class="details-box">
           <summary>Listing details and reasons</summary>
@@ -634,14 +661,29 @@
       </details>
 
       <details class="details-box activity-details">
-        <summary>One-off check history</summary>
+        <summary>One-off activity</summary>
         {% if manual_views %}
         {% for item in manual_views %}
         <article class="compact-row">
           <div>
             <a href="{{ item.url }}">{{ item.url }}</a>
-            <span>{{ item.requested_display }} · {{ item.status_label }}</span>
+            <span>{{ item.requested_display }} · {{ item.action_label }} · {{ item.status_label }}</span>
           </div>
+          {% if item.channels %}
+          <p>Requested: {{ item.channels | map('title') | join(', ') }}</p>
+          {% endif %}
+          {% if item.delivery_statuses %}
+          <div class="delivery-result-list">
+            {% for channel, delivery in item.delivery_statuses.items() %}
+            <div class="delivery-result">
+              <strong>{{ channel | title }}</strong>
+              <span>{{ delivery.outcome | replace('_', ' ') | title }}</span>
+              {% if delivery.message %}<span>{{ delivery.message }}</span>{% endif %}
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% if item.error %}<p class="notice notice-error">{{ item.error }}</p>{% endif %}
           {% if item.result %}
           <details class="inline-details"><summary>Raw result</summary><pre>{{ item.result | tojson(indent=2) }}</pre></details>
           {% endif %}

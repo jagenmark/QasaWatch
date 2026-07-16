@@ -5,7 +5,8 @@ filters in a local dashboard, and QasaWatch can check it on a schedule.
 
 It can also send matching homes by email or Discord, or save them to Google
 Sheets. These connections are optional—you can use QasaWatch locally without
-setting up any of them.
+setting up any of them. QasaWatch is an unofficial independent project and is
+not affiliated with or endorsed by Qasa.
 
 ## Please read before using
 
@@ -15,15 +16,27 @@ connected services, or any other outcome from using this project.
 
 Qasa can be strict about automated access. QasaWatch is consciously designed
 with that in mind: it checks one saved results page at a time, avoids opening
-every listing during automatic checks, varies the check timing, and stops for
-login pages, CAPTCHAs, or incomplete results instead of trying to bypass them.
-These precautions reduce unnecessary activity, but they cannot guarantee that
-Qasa will permit or ignore its use.
+every listing during automatic checks, supports timing variation between
+checks, and stops for login pages, CAPTCHAs, or incomplete results instead of
+trying to bypass them. These precautions reduce unnecessary activity, but they
+cannot guarantee that Qasa will permit or ignore its use.
 
-To the author's knowledge, no previous user has had an account or access
-problem caused by QasaWatch. That is only past experience, not a promise about
-future use. Use a sensible checking interval, monitor the app, and stop using it
-if Qasa objects or its rules do not allow what you are doing.
+To the author's knowledge, no user has reported an account or access problem
+caused by QasaWatch. That is only past experience, not a promise about future
+use. Use a sensible checking interval, monitor the app, and stop using it if
+Qasa objects or its rules do not allow what you are doing.
+
+## Jump to
+
+- [Local setup](#the-easiest-setup-run-it-on-your-own-computer)
+- [First-time setup](#first-time-setup-in-qasawatch)
+- [Email](#email)
+- [Discord](#discord)
+- [Google Sheets](#google-sheets)
+- [Google Maps commute times](#google-maps-commute-times)
+- [Local SCB area data](#local-scb-area-data-advanced)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
 
 ## The easiest setup: run it on your own computer
 
@@ -34,7 +47,10 @@ server or a separate database.
 
 - [Python 3.12 or newer](https://www.python.org/downloads/)
 - [Google Chrome](https://www.google.com/chrome/)
-- This project downloaded or cloned to your computer
+- This project downloaded and extracted to a folder on your computer
+
+If you downloaded a ZIP file, extract it first, open the extracted folder, and
+choose **Open in Terminal** or **Open PowerShell here**.
 
 The instructions below use PowerShell on Windows. macOS and Linux commands are
 included afterward.
@@ -44,7 +60,7 @@ included afterward.
 Open PowerShell in the project folder, then run:
 
 ```powershell
-py -3.12 -m venv .venv
+py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[browser]"
 qasawatch
@@ -89,7 +105,8 @@ test the search without saving listings or sending notifications.
    a login for this, sign in manually in the QasaWatch Chrome window.
 3. Copy the full address of the Qasa search-results page.
 4. Paste it into **Qasa search results link** in the QasaWatch dashboard.
-5. Add at least one commute destination. A second destination is optional.
+5. Add one or more commute destinations if you want travel-time calculations.
+   Otherwise, leave this section empty.
 6. Choose any additional home, area, or listing preferences you care about.
 7. Select **Save settings**.
 8. Select **Check now** and review the result.
@@ -98,14 +115,23 @@ You can leave notification options switched off. Commute calculations are also
 optional; they require a Google Maps API key, but ordinary Qasa searching does
 not.
 
-Once the preview result looks correct:
+Once the preview result looks correct, turn off **Preview mode** so QasaWatch
+can remember which listings it has already seen. Turn on **Automatic
+monitoring** if you want checks to run on a schedule, then save the settings
+again.
 
-1. Turn off **Preview mode**.
-2. Turn on **Automatic monitoring**.
-3. Save the settings again.
+When automatic monitoring is on, QasaWatch checks the saved search at the
+interval shown in the dashboard. Keep the app running for scheduled checks to
+happen.
 
-QasaWatch will now check the saved search at the interval shown in the
-dashboard. Keep the app running for scheduled checks to happen.
+### Checking one listing manually
+
+Use **Check one listing** to inspect any individual Qasa listing without adding
+it to normal watcher history or sending anything automatically. After reviewing
+the result, you can explicitly send it to Discord or email, or save it to
+Google Sheets. Each click is treated as an intentional manual send and will
+send again even if that listing was sent previously. Automatic watcher checks
+still prevent duplicate notifications.
 
 ## The database, in plain language
 
@@ -169,6 +195,10 @@ stop and restart QasaWatch.
 
 Do not share `.env` or commit it to Git. The supplied `.gitignore` already
 excludes it.
+
+QasaWatch reads private connection values from the running environment first
+and uses `.env` for values that are otherwise missing. Restart QasaWatch after
+editing `.env`.
 
 ### Email
 
@@ -295,7 +325,7 @@ enabling them.
 
 5. Restart QasaWatch.
 6. Add as many commute destinations as you need and choose whether each journey
-   should arrive by or leave at 08:00.
+   should arrive by or leave at 08:00 Europe/Stockholm time.
 7. Save and use **Test Google Maps**. The test checks geocoding and also checks
    Routes when at least one commute destination is configured.
 8. Keep Preview mode on and select **Check now**.
@@ -304,23 +334,7 @@ Only set a maximum commute filter after Maps is working. Without a Maps key,
 QasaWatch can still search Qasa. Commutes will be unavailable, and SCB matching
 will work only for listings where Qasa already supplied coordinates.
 
-### Which connection value wins
-
-The dashboard uses one standard environment setting for each private
-connection:
-
-- `QASAWATCH_GOOGLE_MAPS_API_KEY`
-- `QASAWATCH_GOOGLE_SERVICE_ACCOUNT_JSON`
-- `QASAWATCH_DISCORD_WEBHOOK_URL`
-- `QASAWATCH_SMTP_PASSWORD`
-
-At startup, values already supplied by the VM, service manager, or terminal
-take precedence. The project `.env` file only fills settings that are missing.
-Dashboard settings never override private environment values. Restart
-QasaWatch after editing `.env`, then use the dashboard test buttons to verify
-the running process rather than relying on whether a reference was saved.
-
-### Local SCB area data
+### Local SCB area data (advanced)
 
 This optional feature adds local population data from Statistics Sweden (SCB)
 to listings. Separate helpers can build either a smaller Stockholm County file
@@ -341,11 +355,10 @@ python scripts/build_sweden_scb.py
 The nationwide download takes longer and produces a substantially larger file.
 Both builders download public SCB DeSO 2025 geography and demographic data.
 
-It creates:
+The commands create one of the following files:
 
-```text
-data/scb/stockholm-deso-2025.geojson
-```
+- `data/scb/stockholm-deso-2025.geojson` for Stockholm County
+- `data/scb/sweden-deso-2025.geojson` for nationwide coverage
 
 Then open **Location data and map connection** in the dashboard and use:
 
@@ -416,6 +429,13 @@ Stop QasaWatch first. Renaming or removing `qasawatch.db` resets saved settings
 and history. Renaming or removing `.qasawatch` resets the dedicated Chrome
 profile. If your search genuinely requires an account, you may need to sign in
 again afterward.
+
+## License
+
+QasaWatch is available under the [MIT License](LICENSE).
+
+It is provided as-is, without warranty. See the license and the
+[use-at-your-own-risk notice](#please-read-before-using) above.
 
 ## For development or server deployment
 

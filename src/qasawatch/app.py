@@ -480,6 +480,10 @@ def _result_json(result) -> dict:
         "listing_id": result.listing_id, "stage": result.stage.value,
         "duplicate": result.duplicate, "data": dict(result.data),
         "delivery_failures": list(result.delivery_failures),
+        "delivery_statuses": {
+            channel: dict(status)
+            for channel, status in result.delivery_statuses.items()
+        },
         "accepted": result.decision.accepted if result.decision else None,
         "rejection_reasons": [
             {"code": reason.code, "message": reason.message, "source": reason.source.value, "rule": reason.rule, "details": dict(reason.details)}

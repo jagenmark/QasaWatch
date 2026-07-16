@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from collections.abc import Mapping
 from typing import Any, Iterable
@@ -15,7 +16,15 @@ from .browser import QasaBrowser
 from .config import ConfigStore
 from .db import Database
 from .domain import DeliveryChannel, ListingStage, RawListing
-from .models import EmailBatch, Listing, ListingDelivery, ManualProcessing, ProcessingError, Run
+from .models import (
+    EmailBatch,
+    Listing,
+    ListingDelivery,
+    ManualProcessing,
+    ProcessingError,
+    Run,
+    utcnow,
+)
 from .pipeline import Pipeline, ProcessingOptions, ProcessingResult
 from .redaction import redact_text
 from .schemas import PromotionRequest, WatcherConfig, public_config
@@ -264,6 +273,7 @@ class AppService:
                 raise LookupError(f"manual result {request.manual_id} does not exist")
             payload = dict(history.input_data)
             reviewed_result = dict(history.result or {})
+            requested_by = history.requested_by
         reviewed_data = reviewed_result.get("data")
         if not isinstance(reviewed_data, dict):
             raise LookupError(
@@ -279,17 +289,112 @@ class AppService:
         if config.safe_mode and request.channels:
             raise PermissionError("safe verification mode blocks production outputs")
         runtime = self.pipeline_factory(config) if self.pipeline_factory else self.pipeline
+        async with self.database.sessions.begin() as session:
+            promotion = ManualProcessing(
+                action="promote",
+                status="running",
+                requested_by=requested_by,
+                input_data={
+                    "source_manual_id": request.manual_id,
+                    "provider": raw.provider,
+                    "url": raw.url,
+                    "external_id": raw.external_id,
+                    "channels": list(request.channels),
+                },
+            )
+            session.add(promotion)
+            await session.flush()
+            promotion_id = promotion.id
         # A reviewed manual promotion is a single-listing action even when the
         # watcher's normal email mode is one grouped message per scan.
         selected = self._pipeline_for_channels(
             request.channels, pipeline=runtime, per_listing_email=True
         )
-        return await selected.promote_enriched(
-            raw,
-            options=ProcessingOptions(
-                deliver=bool(request.channels), allow_skipped_delivery=True
-            ),
-        )
+        try:
+            result = await selected.promote_enriched(
+                raw,
+                options=ProcessingOptions(
+                    deliver=bool(request.channels),
+                    allow_skipped_delivery=True,
+                    force_delivery=True,
+                ),
+            )
+            statuses = await self._promotion_delivery_statuses(
+                result.listing_id, request.channels
+            )
+            result = replace(result, delivery_statuses=statuses)
+            async with self.database.sessions.begin() as session:
+                promotion = await session.get(ManualProcessing, promotion_id)
+                if promotion is not None:
+                    promotion.listing_id = result.listing_id
+                    promotion.status = (
+                        "failed"
+                        if any(
+                            item.get("outcome") not in {"sent", "already_sent"}
+                            for item in statuses.values()
+                        )
+                        else "succeeded"
+                    )
+                    promotion.result = {
+                        "listing_id": result.listing_id,
+                        "stage": result.stage.value,
+                        "duplicate": result.duplicate,
+                        "delivery_failures": list(result.delivery_failures),
+                        "delivery_statuses": statuses,
+                    }
+                    promotion.finished_at = utcnow()
+            return result
+        except BaseException as exc:
+            async with self.database.sessions.begin() as session:
+                promotion = await session.get(ManualProcessing, promotion_id)
+                if promotion is not None:
+                    promotion.status = "failed"
+                    promotion.error = redact_text(exc)
+                    promotion.finished_at = utcnow()
+            raise
+
+    async def _promotion_delivery_statuses(
+        self,
+        listing_id: int | None,
+        channels: Iterable[str],
+    ) -> dict[str, dict[str, Any]]:
+        requested = tuple(channels)
+        if listing_id is None or not requested:
+            return {}
+        async with self.database.sessions() as session:
+            rows = (
+                await session.scalars(
+                    select(ListingDelivery).where(
+                        ListingDelivery.listing_id == listing_id,
+                        ListingDelivery.channel.in_(requested),
+                    )
+                )
+            ).all()
+        by_channel = {row.channel: row for row in rows}
+        statuses: dict[str, dict[str, Any]] = {}
+        for channel in requested:
+            row = by_channel.get(channel)
+            state = row.state if row is not None else "not_configured"
+            outcome = (
+                "sent"
+                if state == "succeeded"
+                else state
+            )
+            statuses[channel] = {
+                "state": state,
+                "outcome": outcome,
+                "message": (
+                    redact_text(row.last_error)
+                    if row is not None and row.last_error
+                    else None
+                ),
+                "delivered_at": (
+                    row.delivered_at.isoformat()
+                    if row is not None and row.delivered_at
+                    else None
+                ),
+            }
+        return statuses
 
     async def retry_listing(self, listing_id: int, channels: Iterable[str] = ()) -> ProcessingResult:
         config = await self.get_config()
@@ -763,11 +868,23 @@ class AppService:
         manual_views = [
             {
                 "id": item.id,
+                "action": item.action,
+                "action_label": (
+                    "Send reviewed listing"
+                    if item.action == "promote"
+                    else "Check listing"
+                ),
                 "status": item.status,
                 "status_label": _status_label(item.status),
+                "status_tone": _status_tone(item.status),
                 "requested_display": _stockholm_time(item.started_at),
                 "url": item.input_data.get("url", ""),
+                "channels": list(item.input_data.get("channels") or []),
                 "result": item.result,
+                "delivery_statuses": dict(
+                    (item.result or {}).get("delivery_statuses") or {}
+                ),
+                "error": redact_text(item.error) if item.error else None,
             }
             for item in manual
         ]

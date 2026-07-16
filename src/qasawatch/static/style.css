@@ -389,6 +389,28 @@ main {
   margin-top: 1rem;
 }
 
+.delivery-result-list {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 1rem;
+}
+
+.delivery-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem 0.75rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--soft);
+}
+
+.delivery-result > span:last-child:not(.status-badge) {
+  flex-basis: 100%;
+  color: var(--muted);
+}
+
 .eyebrow {
   margin: 0 0 0.35rem;
   color: var(--brand);

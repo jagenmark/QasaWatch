@@ -48,6 +48,7 @@ class ProcessingOptions:
     record_manual_history: bool = False
     raise_errors: bool = True
     allow_skipped_delivery: bool = False
+    force_delivery: bool = False
     use_enrichment_cache: bool = False
 
     @classmethod
@@ -69,6 +70,7 @@ class ProcessingResult:
     data: Mapping[str, Any] = field(default_factory=dict)
     manual_history_id: int | None = None
     delivery_failures: tuple[str, ...] = ()
+    delivery_statuses: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
 
 class Pipeline:
@@ -352,7 +354,12 @@ class Pipeline:
                 if self._is_grouped_email(channel, provider):
                     continue
                 try:
-                    await self._deliver(listing_id, channel, provider)
+                    await self._deliver(
+                        listing_id,
+                        channel,
+                        provider,
+                        force=opts.force_delivery,
+                    )
                 except BaseException as exc:
                     await self._record_error(
                         listing_id, run_id, f"delivery:{channel.value}", exc
@@ -613,6 +620,8 @@ class Pipeline:
         listing_id: int,
         channel: DeliveryChannel,
         provider: DeliveryProvider,
+        *,
+        force: bool = False,
     ) -> None:
         async with self.database.sessions.begin() as session:
             delivery = await session.scalar(
@@ -622,28 +631,44 @@ class Pipeline:
                 )
             )
             assert delivery is not None
-            if delivery.state in {
+            if not force and delivery.state in {
                 DeliveryState.SUCCEEDED.value,
                 DeliveryState.SKIPPED.value,
                 DeliveryState.IN_PROGRESS.value,
                 DeliveryState.MANUAL_REVIEW.value,
             }:
                 return
+            if force and delivery.state in {
+                DeliveryState.IN_PROGRESS.value,
+                DeliveryState.MANUAL_REVIEW.value,
+            }:
+                raise RuntimeError(
+                    f"{channel.value} delivery is already in progress or awaiting review"
+                )
             attempt = await session.scalar(
                 select(DeliveryAttempt)
                 .where(DeliveryAttempt.delivery_id == delivery.id)
                 .order_by(DeliveryAttempt.sequence.desc())
                 .limit(1)
             )
-            if attempt is None or attempt.state == DeliveryState.FAILED.value:
+            if (
+                force
+                or attempt is None
+                or attempt.state == DeliveryState.FAILED.value
+            ):
                 sequence = 1 if attempt is None else attempt.sequence + 1
                 attempt = DeliveryAttempt(
                     delivery_id=delivery.id,
                     sequence=sequence,
-                    # Stable for the logical delivery, including known retries.
-                    # Providers use this key to collapse an earlier success whose
-                    # response was lost before local commit.
-                    idempotency_key=f"qasawatch:{listing_id}:{channel.value}",
+                    # Normal retries retain a stable key so providers can collapse
+                    # an ambiguous earlier send. An explicit manual resend is a
+                    # new operator-requested event and intentionally gets a fresh
+                    # key so it is delivered again.
+                    idempotency_key=(
+                        f"qasawatch:{listing_id}:{channel.value}:manual:{sequence}"
+                        if force
+                        else f"qasawatch:{listing_id}:{channel.value}"
+                    ),
                     state=DeliveryState.IN_PROGRESS.value,
                 )
                 session.add(attempt)

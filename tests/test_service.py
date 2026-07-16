@@ -9,6 +9,7 @@ from qasawatch.domain import DeliveryChannel, DeliveryResult, EnrichedListing, R
 from qasawatch.emailer import EmailMode, EmailOutput
 from qasawatch.filters import FilterChain, NumericRangeFilter
 from qasawatch.models import (
+    DeliveryAttempt,
     EmailBatch,
     Listing,
     ListingDelivery,
@@ -121,6 +122,60 @@ async def test_manual_promotion_only_delivers_after_explicit_review(database):
     assert output.calls == []
     promoted = await service.promote_manual(PromotionRequest(manual_id=history_id, channels=["discord"]))
     assert promoted.listing_id is not None and len(output.calls) == 1
+    assert promoted.delivery_statuses["discord"]["outcome"] == "sent"
+    async with database.sessions() as session:
+        promotion = await session.scalar(
+            select(ManualProcessing).where(ManualProcessing.action == "promote")
+        )
+        assert promotion.status == "succeeded"
+        assert promotion.result["delivery_statuses"]["discord"]["outcome"] == "sent"
+
+
+async def test_repeated_manual_promotion_sends_again_with_a_fresh_attempt(
+    database,
+):
+    output = Output()
+    service = AppService(
+        database, FakeBrowser(), Pipeline(database, outputs=[output])
+    )
+    await service.save_config(WatcherConfig(safe_mode=False))
+    history_id, _ = await service.process_manual(
+        "https://qasa.com/se/sv/home/manual-1"
+    )
+
+    first = await service.promote_manual(
+        PromotionRequest(manual_id=history_id, channels=["discord"])
+    )
+    second = await service.promote_manual(
+        PromotionRequest(manual_id=history_id, channels=["discord"])
+    )
+
+    assert first.delivery_statuses["discord"]["outcome"] == "sent"
+    assert second.delivery_statuses["discord"]["outcome"] == "sent"
+    assert len(output.calls) == 2
+    async with database.sessions() as session:
+        promotions = (
+            await session.scalars(
+                select(ManualProcessing)
+                .where(ManualProcessing.action == "promote")
+                .order_by(ManualProcessing.id)
+            )
+        ).all()
+        assert len(promotions) == 2
+        assert promotions[-1].result["delivery_statuses"]["discord"]["outcome"] == "sent"
+        delivery = await session.scalar(
+            select(ListingDelivery).where(ListingDelivery.channel == "discord")
+        )
+        attempts = (
+            await session.scalars(
+                select(DeliveryAttempt)
+                .where(DeliveryAttempt.delivery_id == delivery.id)
+                .order_by(DeliveryAttempt.sequence)
+            )
+        ).all()
+        assert [attempt.sequence for attempt in attempts] == [1, 2]
+        assert attempts[0].idempotency_key != attempts[1].idempotency_key
+        assert attempts[1].idempotency_key.endswith(":manual:2")
 
 
 async def test_manual_promotion_refreshes_stale_duplicate_with_reviewed_enrichment(database):
