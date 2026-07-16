@@ -10,6 +10,7 @@ from qasawatch.scheduler import WatchScheduler
 
 async def test_scheduler_prevents_local_overlap(tmp_path):
     db = Database(tmp_path / "state.db"); await db.initialize()
+    await ConfigStore(db).set_value("watcher.config", {"enabled": True})
     started, release = asyncio.Event(), asyncio.Event()
     async def run_callback(**kwargs):
         started.set(); await release.wait(); return {"status": "succeeded"}
@@ -25,6 +26,7 @@ async def test_scheduler_prevents_local_overlap(tmp_path):
 async def test_denied_database_lease_advances_next_run(tmp_path):
     db = Database(tmp_path / "denied.db")
     await db.initialize()
+    await ConfigStore(db).set_value("watcher.config", {"enabled": True})
     await db.acquire_scan_lease("watcher-scan", "other", ttl=timedelta(minutes=5))
     scheduler = WatchScheduler(db, ConfigStore(db), lambda **kwargs: None)
     result = await scheduler.run_once()
@@ -94,6 +96,22 @@ async def test_failed_scheduled_scan_does_not_kill_scheduler_loop(tmp_path):
     assert scheduler.last_error == "RuntimeError: temporary scan failure"
     assert await scheduler.next_run() > datetime.now(UTC).astimezone()
     await scheduler.stop()
+    await db.dispose()
+
+
+async def test_disabled_config_clears_persisted_next_run(tmp_path):
+    db = Database(tmp_path / "disabled.db")
+    await db.initialize()
+    store = ConfigStore(db)
+    await store.set_value("watcher.config", {"enabled": True})
+    scheduler = WatchScheduler(db, store, lambda **kwargs: None)
+    await scheduler.schedule_next()
+    assert await scheduler.next_run() is not None
+
+    await store.set_value("watcher.config", {"enabled": False})
+    await scheduler.config_changed()
+
+    assert await scheduler.next_run() is None
     await db.dispose()
 
 
