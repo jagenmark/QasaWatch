@@ -44,7 +44,6 @@ class FilterSettings(BaseModel):
     maximum_rooms: float | None = Field(None, ge=0)
     minimum_area: float | None = Field(None, ge=0)
     maximum_area: float | None = Field(None, ge=0)
-    maximum_commute_minutes: int | None = Field(None, ge=1)
     allowed_locations: list[str] = Field(default_factory=list)
     excluded_locations: list[str] = Field(default_factory=list)
     required_keywords: list[str] = Field(default_factory=list)
@@ -54,6 +53,12 @@ class FilterSettings(BaseModel):
     minimum_population: int | None = Field(None, ge=0)
     maximum_population: int | None = Field(None, ge=0)
     maximum_average_age: float | None = Field(None, ge=0)
+    minimum_foreign_background_percent: float | None = Field(
+        None, ge=0, le=100
+    )
+    maximum_foreign_background_percent: float | None = Field(
+        None, ge=0, le=100
+    )
     attribute_requirements: dict[ListingAttribute, bool] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -64,6 +69,16 @@ class FilterSettings(BaseModel):
             raise ValueError("minimum_rooms cannot exceed maximum_rooms")
         if self.minimum_area is not None and self.maximum_area is not None and self.minimum_area > self.maximum_area:
             raise ValueError("minimum_area cannot exceed maximum_area")
+        if (
+            self.minimum_foreign_background_percent is not None
+            and self.maximum_foreign_background_percent is not None
+            and self.minimum_foreign_background_percent
+            > self.maximum_foreign_background_percent
+        ):
+            raise ValueError(
+                "minimum_foreign_background_percent cannot exceed "
+                "maximum_foreign_background_percent"
+            )
         return self
 
 

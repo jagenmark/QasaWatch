@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
+from .browser_host import BrowserHostError
 from .scheduler import WatchScheduler
 from .schemas import ManualRequest, PromotionRequest, RetryRequest, TestEmailRequest, WatcherConfig
 from .service import AppService, IncompletePageError
@@ -44,10 +45,14 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
                 service.last_browser_state = {"status": "running", "errors": []}
             except Exception as exc:
                 # Keep the operator interface available for diagnosis/config.
-                # Do not expose provider/browser exception bodies in HTML.
+                message = (
+                    str(exc)
+                    if isinstance(exc, BrowserHostError)
+                    else f"browser startup failed ({type(exc).__name__})"
+                )
                 service.last_browser_state = {
                     "status": "error",
-                    "errors": [f"browser startup failed ({type(exc).__name__})"],
+                    "errors": [message],
                 }
         if start_scheduler:
             await service.scheduler.start()
@@ -110,7 +115,6 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
         filter_maximum_rooms: str | None = Form(None),
         filter_minimum_area: str | None = Form(None),
         filter_maximum_area: str | None = Form(None),
-        filter_maximum_commute_minutes: str | None = Form(None),
         filter_allowed_locations: str | None = Form(None),
         filter_excluded_locations: str | None = Form(None),
         filter_required_keywords: str | None = Form(None),
@@ -120,6 +124,8 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
         filter_minimum_population: str | None = Form(None),
         filter_maximum_population: str | None = Form(None),
         filter_maximum_average_age: str | None = Form(None),
+        filter_minimum_foreign_background_percent: str | None = Form(None),
+        filter_maximum_foreign_background_percent: str | None = Form(None),
         sheets_enabled: bool = Form(False),
         sheets_spreadsheet_id: str | None = Form(None),
         sheets_worksheet: str | None = Form(None),
@@ -256,10 +262,17 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
                 "maximum_rooms": (filter_maximum_rooms, float),
                 "minimum_area": (filter_minimum_area, float),
                 "maximum_area": (filter_maximum_area, float),
-                "maximum_commute_minutes": (filter_maximum_commute_minutes, int),
                 "minimum_population": (filter_minimum_population, int),
                 "maximum_population": (filter_maximum_population, int),
                 "maximum_average_age": (filter_maximum_average_age, float),
+                "minimum_foreign_background_percent": (
+                    filter_minimum_foreign_background_percent,
+                    float,
+                ),
+                "maximum_foreign_background_percent": (
+                    filter_maximum_foreign_background_percent,
+                    float,
+                ),
             }
             if any(value is not None for value, _ in filter_controls.values()):
                 for key, (raw_value, converter) in filter_controls.items():
@@ -344,7 +357,10 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
 
     @app.post("/api/run-now")
     async def run_now():
-        return await service.scheduler.run_now()
+        try:
+            return await service.scheduler.run_now()
+        except BrowserHostError as exc:
+            raise HTTPException(503, str(exc)) from exc
 
     @app.post("/api/manual")
     async def manual(payload: ManualRequest, request: Request):
@@ -352,6 +368,8 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
             history_id, result = await service.process_manual(payload.url, requested_by=request.client.host if request.client else None)
         except IncompletePageError as exc:
             raise HTTPException(422, str(exc)) from exc
+        except BrowserHostError as exc:
+            raise HTTPException(503, str(exc)) from exc
         return {"manual_id": history_id, **_result_json(result)}
 
     @app.post("/manual", response_class=HTMLResponse)
@@ -362,10 +380,18 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
             state = await service.dashboard()
             state.update({"manual_result": _result_json(result), "manual_id": history_id})
             return TEMPLATES.TemplateResponse(request, "dashboard.html", state)
-        except (ValidationError, ValueError, IncompletePageError) as exc:
+        except (
+            ValidationError,
+            ValueError,
+            IncompletePageError,
+            BrowserHostError,
+        ) as exc:
             state = await service.dashboard()
             state["manual_error"] = str(exc)
-            return TEMPLATES.TemplateResponse(request, "dashboard.html", state, status_code=422)
+            status_code = 503 if isinstance(exc, BrowserHostError) else 422
+            return TEMPLATES.TemplateResponse(
+                request, "dashboard.html", state, status_code=status_code
+            )
 
     @app.post("/api/manual/promote")
     async def promote(payload: PromotionRequest):

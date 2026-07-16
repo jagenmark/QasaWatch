@@ -76,6 +76,95 @@
   renumberDestinations();
   serializeDestinations();
 
+  const liveSelectors = [
+    "#live-monitoring-status",
+    "#live-next-check",
+    "#live-system-details",
+    "#live-connection-maps",
+    "#live-connection-discord",
+    "#live-connection-sheets",
+    "#live-connection-email",
+  ];
+  let liveRefreshInProgress = false;
+
+  const copyLiveElement = (freshDocument, selector) => {
+    const current = document.querySelector(selector);
+    const fresh = freshDocument.querySelector(selector);
+    if (!current || !fresh) {
+      return;
+    }
+    current.className = fresh.className;
+    current.innerHTML = fresh.innerHTML;
+  };
+
+  const bindShowOlder = (root = document) => {
+    root.querySelectorAll("[data-show-older]").forEach((button) => {
+      if (button.dataset.bound === "true") {
+        return;
+      }
+      button.dataset.bound = "true";
+      button.addEventListener("click", () => {
+        const section = button.closest("details");
+        const olderItems = section?.querySelectorAll("[data-older-item]") || [];
+        const showing = [...olderItems].some((item) => item.hidden);
+        olderItems.forEach((item) => {
+          item.hidden = !showing;
+        });
+        const baseLabel = button.textContent.replace(
+          /^(Show older|Show fewer)/,
+          "",
+        ).trim();
+        button.textContent = `${showing ? "Show fewer" : "Show older"} ${baseLabel}`;
+      });
+    });
+  };
+
+  bindShowOlder();
+
+  const refreshLiveDashboard = async () => {
+    if (document.hidden || liveRefreshInProgress) {
+      return;
+    }
+    liveRefreshInProgress = true;
+    try {
+      const response = await fetch("/", {
+        headers: { Accept: "text/html", "X-QasaWatch-Live": "1" },
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        return;
+      }
+      const freshDocument = new DOMParser().parseFromString(
+        await response.text(),
+        "text/html",
+      );
+      liveSelectors.forEach((selector) => copyLiveElement(freshDocument, selector));
+
+      const currentActivity = document.querySelector("#live-activity");
+      const freshActivity = freshDocument.querySelector("#live-activity");
+      if (
+        currentActivity &&
+        freshActivity &&
+        currentActivity.dataset.activityVersion !==
+          freshActivity.dataset.activityVersion
+      ) {
+        currentActivity.replaceWith(freshActivity);
+        bindShowOlder(freshActivity);
+      }
+    } catch (_error) {
+      // A temporary dashboard/network failure should not interrupt editing.
+    } finally {
+      liveRefreshInProgress = false;
+    }
+  };
+
+  window.setInterval(refreshLiveDashboard, 15_000);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      refreshLiveDashboard();
+    }
+  });
+
   const form = document.querySelector("#run-now-form");
   const button = document.querySelector("#run-now-button");
   const dialog = document.querySelector("#run-result-dialog");

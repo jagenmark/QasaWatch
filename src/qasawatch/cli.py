@@ -117,14 +117,17 @@ def _filters(settings, destinations=()) -> FilterChain:
                 f"{attribute.replace('_', ' ')} must be {expectation}; the value is missing or does not match",
             )
         )
-    if settings.maximum_commute_minutes is not None:
-        rules.append(PredicateFilter("maximum_commute", lambda item: bool(item.data.get("commutes")) and all(value.get("duration_seconds") is not None and value["duration_seconds"] <= settings.maximum_commute_minutes * 60 for value in item.data["commutes"].values()), "commute.too_long_or_missing", "one or more commutes exceed the configured limit or are unavailable"))
     for destination in destinations:
         if destination.maximum_commute_minutes is not None:
             rules.append(PredicateFilter(f"commute_{destination.label}", lambda item, destination=destination: item.data.get("commutes", {}).get(destination.label, {}).get("duration_seconds") is not None and item.data["commutes"][destination.label]["duration_seconds"] <= destination.maximum_commute_minutes * 60, "commute.destination_limit", f"commute to {destination.label} exceeds its limit or is unavailable"))
     for field, minimum, maximum in (
         ("population", settings.minimum_population, settings.maximum_population),
         ("average_age", None, settings.maximum_average_age),
+        (
+            "foreign_background_percent",
+            settings.minimum_foreign_background_percent,
+            settings.maximum_foreign_background_percent,
+        ),
     ):
         if minimum is not None or maximum is not None:
             def demographic_ok(item, field=field, minimum=minimum, maximum=maximum):

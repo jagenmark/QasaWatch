@@ -33,6 +33,12 @@ the basis for `/etc/systemd/system/qasawatch.service`. Its `ExecStart` uses the
 packaged command; keep `safe_mode` enabled until provider credentials and
 destinations have been tested.
 
+QasaWatch searches the normal Chrome and Chromium command names and follows
+launcher-to-browser process handoffs. If a distribution installs the browser
+elsewhere, set `QASAWATCH_CHROME_EXECUTABLE` to the full executable path in the
+environment file. Run Chrome and QasaWatch as the dedicated non-root
+`qasawatch` account.
+
 ## Service lifecycle
 
 After installing or changing a unit:

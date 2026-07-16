@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import IO
@@ -32,14 +35,44 @@ class BrowserDescriptor:
 
 def find_chrome() -> Path:
     candidates: list[Path] = []
-    if os.name == "nt":
+    configured = os.getenv("QASAWATCH_CHROME_EXECUTABLE")
+    if configured:
+        candidate = Path(configured).expanduser()
+        if candidate.is_file():
+            return candidate.resolve()
+        raise BrowserHostError(
+            f"QASAWATCH_CHROME_EXECUTABLE does not point to a file: {candidate}"
+        )
+    if sys.platform == "darwin":
+        candidates.extend(
+            [
+                Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+                Path.home()
+                / "Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            ]
+        )
+    elif os.name == "nt":
         for env in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
             if root := os.getenv(env):
                 candidates.append(Path(root) / "Google/Chrome/Application/chrome.exe")
     else:
-        for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+        for name in (
+            "google-chrome",
+            "google-chrome-stable",
+            "google-chrome-beta",
+            "google-chrome-unstable",
+            "chromium",
+            "chromium-browser",
+        ):
             if found := shutil.which(name):
                 candidates.append(Path(found))
+        candidates.extend(
+            [
+                Path("/opt/google/chrome/chrome"),
+                Path("/usr/lib/chromium/chromium"),
+                Path("/usr/lib/chromium-browser/chromium-browser"),
+            ]
+        )
     for candidate in candidates:
         if candidate.is_file():
             return candidate.resolve()
@@ -109,7 +142,16 @@ class ChromeHost:
             deadline = time.monotonic() + min(timeout, 5.0)
             while self._refresh_owned_descriptor(owned) and time.monotonic() < deadline:
                 time.sleep(0.05)
-        chrome = (self.executable or find_chrome()).resolve()
+        if (
+            sys.platform.startswith("linux")
+            and not os.getenv("DISPLAY")
+            and not os.getenv("WAYLAND_DISPLAY")
+        ):
+            raise BrowserHostError(
+                "Chrome needs a graphical display. Start QasaWatch from a Linux "
+                "desktop session, or set DISPLAY for an X11/Xvfb session."
+            )
+        chrome = (self.executable or find_chrome()).expanduser().resolve()
         port = self.port or _free_loopback_port()
         token = uuid.uuid4().hex
         args = [str(chrome), f"--remote-debugging-port={port}", "--remote-debugging-address=127.0.0.1",
@@ -117,8 +159,19 @@ class ChromeHost:
         flags = 0
         if os.name == "nt":
             flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-        process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL, close_fds=True, creationflags=flags)
+        try:
+            process = subprocess.Popen(
+                args,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                creationflags=flags,
+            )
+        except OSError as exc:
+            raise BrowserHostError(
+                f"Chrome could not be started from {chrome} ({type(exc).__name__})"
+            ) from exc
         descriptor = BrowserDescriptor(process.pid, port, token, str(chrome), str(self.profile_dir.resolve()), time.time())
         self._write_descriptor(descriptor)
         deadline = time.monotonic() + timeout
@@ -138,7 +191,10 @@ class ChromeHost:
                     descriptor = handed_off
                     self._write_descriptor(descriptor)
                 elif returncode != 0:
-                    raise BrowserHostError(f"Chrome exited during startup ({returncode})")
+                    raise BrowserHostError(
+                        f"Chrome exited during startup ({returncode}). Verify the "
+                        "Chrome installation and graphical display."
+                    )
                 # Chrome on Windows can exit its launcher with code 0 before
                 # the long-lived browser process and CDP listener are visible.
             time.sleep(0.1)
@@ -161,7 +217,7 @@ class ChromeHost:
             return None
 
     def owns_process(self, descriptor: BrowserDescriptor) -> bool:
-        """Validate PID, executable, profile and unguessable launch token."""
+        """Validate PID against the exact private launch markers."""
         command = _process_command_line(descriptor.pid)
         return bool(command and self._command_matches(descriptor, command))
 
@@ -185,11 +241,23 @@ class ChromeHost:
         return None
 
     @staticmethod
-    def _command_matches(descriptor: BrowserDescriptor, command: str) -> bool:
-        folded = command.casefold()
-        return (Path(descriptor.executable).name.casefold() in folded
-                and f"--qasawatch-owner={descriptor.owner_token}".casefold() in folded
-                and f"--user-data-dir={descriptor.profile_dir}".casefold() in folded)
+    def _command_matches(
+        descriptor: BrowserDescriptor, command: str | Sequence[str]
+    ) -> bool:
+        # Linux launchers commonly hand off from a wrapper such as
+        # `google-chrome` to `/opt/google/chrome/chrome`. The executable name is
+        # therefore not a stable ownership marker. These values are supplied
+        # only to QasaWatch's dedicated browser and remain unchanged across the
+        # handoff.
+        markers = (
+            (f"--qasawatch-owner={descriptor.owner_token}", False),
+            (f"--user-data-dir={descriptor.profile_dir}", os.name == "nt"),
+            (f"--remote-debugging-port={descriptor.port}", False),
+        )
+        return all(
+            _contains_exact_argument(command, marker, ignore_case=ignore_case)
+            for marker, ignore_case in markers
+        )
 
     def close(self) -> None:
         self._lock.release()
@@ -216,7 +284,15 @@ class ChromeHost:
         if os.name == "nt":
             subprocess.run(["taskkill", "/PID", str(descriptor.pid), "/T", "/F"], capture_output=True, check=False)
         else:
-            os.kill(descriptor.pid, 15)
+            try:
+                os.kill(descriptor.pid, 15)
+            except ProcessLookupError:
+                # Chrome may exit after ownership was checked.
+                return
+            except PermissionError as exc:
+                raise BrowserHostError(
+                    f"QasaWatch cannot stop its Chrome process (PID {descriptor.pid})"
+                ) from exc
 
 
 def _free_loopback_port() -> int:
@@ -224,10 +300,43 @@ def _free_loopback_port() -> int:
         sock.bind(("127.0.0.1", 0)); return int(sock.getsockname()[1])
 
 
-def _process_command_line(pid: int) -> str | None:
+def _contains_exact_argument(
+    command: str | Sequence[str], argument: str, *, ignore_case: bool = False
+) -> bool:
+    """Match one command-line argument, allowing platform-added quoting."""
+    if not isinstance(command, str):
+        if ignore_case:
+            expected = argument.casefold()
+            return any(value.casefold() == expected for value in command)
+        return argument in command
+    pattern = rf'(?:(?<=^)|(?<=\s))"?{re.escape(argument)}"?(?=\s|$)'
+    flags = re.IGNORECASE if ignore_case else 0
+    return re.search(pattern, command, flags=flags) is not None
+
+
+def _process_command_line(pid: int) -> str | tuple[str, ...] | None:
     if os.name != "nt":
-        try: return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
-        except OSError: return None
+        if sys.platform.startswith("linux"):
+            try:
+                raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+                return tuple(
+                    value.decode(errors="replace")
+                    for value in raw.split(b"\0")
+                    if value
+                )
+            except OSError:
+                return None
+        try:
+            result = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "command="],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+            return result.stdout.strip() or None
+        except (OSError, subprocess.TimeoutExpired):
+            return None
     script = f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"
     try:
         result = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
@@ -237,17 +346,42 @@ def _process_command_line(pid: int) -> str | None:
         return None
 
 
-def _iter_process_command_lines() -> list[tuple[int, str]]:
+def _iter_process_command_lines() -> list[tuple[int, str | tuple[str, ...]]]:
     if os.name != "nt":
-        values: list[tuple[int, str]] = []
-        for directory in Path("/proc").glob("[0-9]*"):
-            try:
-                command = (directory / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
-                if command:
-                    values.append((int(directory.name), command))
-            except (OSError, ValueError):
-                continue
-        return values
+        if sys.platform.startswith("linux"):
+            values: list[tuple[int, str | tuple[str, ...]]] = []
+            for directory in Path("/proc").glob("[0-9]*"):
+                try:
+                    raw = (directory / "cmdline").read_bytes()
+                    command = tuple(
+                        value.decode(errors="replace")
+                        for value in raw.split(b"\0")
+                        if value
+                    )
+                    if command:
+                        values.append((int(directory.name), command))
+                except (OSError, ValueError):
+                    continue
+            return values
+        try:
+            result = subprocess.run(
+                ["ps", "-axo", "pid=,command="],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            values = []
+            for line in result.stdout.splitlines():
+                fields = line.strip().split(None, 1)
+                if len(fields) == 2:
+                    try:
+                        values.append((int(fields[0]), fields[1]))
+                    except ValueError:
+                        continue
+            return values
+        except (OSError, subprocess.TimeoutExpired):
+            return []
     script = (
         "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
         "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"

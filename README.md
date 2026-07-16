@@ -92,6 +92,13 @@ qasawatch
 
 Then open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
+On Linux, run QasaWatch from a graphical desktop session. A server without a
+desktop needs the private Xvfb setup described in the
+[operations guide](docs/OPERATIONS.md). QasaWatch recognizes the normal
+`google-chrome`, `google-chrome-stable`, `chromium`, and `chromium-browser`
+commands, including launchers that hand off to a differently named Chrome
+process.
+
 ## First-time setup in QasaWatch
 
 Keep **Preview mode** turned on while setting things up. In preview mode you can
@@ -401,7 +408,23 @@ For less common settings and technical details, see the
 ### Chrome does not open
 
 Make sure Google Chrome is installed in its normal location, then stop and
-restart QasaWatch.
+restart QasaWatch. On Linux, confirm that the terminal has a graphical display:
+
+```sh
+echo "$DISPLAY"
+echo "$WAYLAND_DISPLAY"
+```
+
+If Chrome or Chromium is installed in an unusual location, add its full path to
+`.env`, then restart QasaWatch:
+
+```dotenv
+QASAWATCH_CHROME_EXECUTABLE=/full/path/to/google-chrome
+```
+
+Do not start QasaWatch with `sudo`; run it as your normal desktop user. For a
+headless Linux server, use the dedicated non-root service account and Xvfb
+configuration from the operations guide.
 
 ### Qasa asks you to sign in or complete a CAPTCHA
 

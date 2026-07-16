@@ -5,8 +5,9 @@ import pytest
 from pydantic import ValidationError
 
 from qasawatch.app import create_app
+from qasawatch.browser_host import BrowserHostError
 from qasawatch.db import Database
-from qasawatch.models import ProcessingError, Run
+from qasawatch.models import Listing, ProcessingError, Run
 from qasawatch.pipeline import Pipeline
 from qasawatch.schemas import FilterSettings, WatcherConfig
 from qasawatch.service import AppService
@@ -20,6 +21,11 @@ class StartupBrowser(NoBrowser):
     def __init__(self): self.connected = False
     async def connect(self): self.connected = True
     async def close(self): pass
+
+
+class FailingBrowser:
+    async def scan(self, url, *, results_only=False):
+        raise BrowserHostError("Chrome needs a graphical display")
 
 
 async def test_config_api_redacts_all_secret_references(tmp_path):
@@ -40,6 +46,29 @@ async def test_config_api_redacts_all_secret_references(tmp_path):
     assert response.json()["discord"]["secret_configured"] is True
     assert all(secret not in dashboard.text for secret in ("PRIVATE_SHEETS_42", "PRIVATE_DISCORD_42", "PRIVATE_SMTP_42"))
     assert invalid.status_code == 422
+    await db.dispose()
+
+
+async def test_manual_browser_failure_returns_actionable_service_unavailable(tmp_path):
+    db = Database(tmp_path / "browser-failure.db")
+    await db.initialize()
+    service = AppService(db, FailingBrowser(), Pipeline(db))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service)),
+        base_url="http://test",
+    ) as client:
+        api_response = await client.post(
+            "/api/manual", json={"url": "https://qasa.com/se/sv/home/example"}
+        )
+        form_response = await client.post(
+            "/manual", data={"url": "https://qasa.com/se/sv/home/example"}
+        )
+
+    assert api_response.status_code == 503
+    assert api_response.json()["detail"] == "Chrome needs a graphical display"
+    assert form_response.status_code == 503
+    assert "Chrome needs a graphical display" in form_response.text
     await db.dispose()
 
 
@@ -466,6 +495,8 @@ async def test_normal_provider_and_filter_controls_save_without_editing_json(tmp
             "qasa_results_url": "https://qasa.com/se/sv/find-home",
             "filter_maximum_rent": "10300",
             "filter_minimum_area": "25",
+            "filter_minimum_foreign_background_percent": "20",
+            "filter_maximum_foreign_background_percent": "50",
             "filter_allowed_locations": "Solna\nSundbyberg",
             "sheets_enabled": "true",
             "sheets_spreadsheet_id": "sheet-123",
@@ -497,6 +528,8 @@ async def test_normal_provider_and_filter_controls_save_without_editing_json(tmp
     saved = await service.get_config()
     assert saved.filters.maximum_rent == 10300
     assert saved.filters.minimum_area == 25
+    assert saved.filters.minimum_foreign_background_percent == 20
+    assert saved.filters.maximum_foreign_background_percent == 50
     assert saved.filters.allowed_locations == ["Solna", "Sundbyberg"]
     assert saved.sheets.enabled and saved.sheets.spreadsheet_id == "sheet-123"
     assert (
@@ -515,6 +548,9 @@ async def test_normal_provider_and_filter_controls_save_without_editing_json(tmp
     assert saved.scb.data_path == "data/scb/sweden.geojson"
     assert saved.scb.id_column == "deso_id"
     assert saved.maps_api_secret_ref == "env:QASAWATCH_GOOGLE_MAPS_API_KEY"
+    assert "Longest commute (minutes)" not in dashboard.text
+    assert "Minimum foreign background nearby (%)" in dashboard.text
+    assert "Maximum foreign background nearby (%)" in dashboard.text
     await db.dispose()
 
 
@@ -762,7 +798,13 @@ async def test_dashboard_formats_schedule_and_hides_coordination_details(tmp_pat
     assert "All times are shown in Europe/Stockholm." in response.text
     assert 'id="run-now-form"' in response.text
     assert 'id="run-result-dialog"' in response.text
-    assert 'src="/static/dashboard.js?v=20260716-7"' in response.text
+    assert 'src="/static/dashboard.js?v=20260716-8"' in response.text
+    assert 'id="live-next-check"' in response.text
+    assert 'id="live-system-details"' in response.text
+    assert 'id="live-activity"' in response.text
+    assert "data-activity-version=" in response.text
+    assert "<summary>Latest checks" in response.text
+    assert "<summary>Latest homes" in response.text
     await db.dispose()
 
 
@@ -784,4 +826,34 @@ async def test_dashboard_stockholm_time_handles_winter_cet(tmp_path):
         response = await client.get("/")
 
     assert "16 January 2026, 10:30" in response.text
+    await db.dispose()
+
+
+async def test_recent_activity_previews_three_items_and_offers_show_older(
+    tmp_path,
+):
+    db = Database(tmp_path / "activity-preview.db")
+    await db.initialize()
+    service = AppService(db, NoBrowser(), Pipeline(db))
+    async with db.sessions.begin() as session:
+        for index in range(5):
+            session.add(Run(status="succeeded", stats={"found": index}))
+            session.add(Listing(
+                natural_key=f"listing-{index}",
+                provider="qasa",
+                external_id=str(index),
+                url=f"https://qasa.com/home/{index}",
+                stage="accepted",
+                data={"address": f"Home {index}"},
+                content_hash=f"hash-{index}",
+            ))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service)), base_url="http://test"
+    ) as client:
+        response = await client.get("/")
+
+    assert "Show older checks" in response.text
+    assert "Show older homes" in response.text
+    assert response.text.count("data-older-item") == 4
     await db.dispose()

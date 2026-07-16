@@ -16,7 +16,7 @@
         <p class="header-copy">Checks Qasa for matching homes and lets you know when something new appears.</p>
       </div>
       <div class="header-status" aria-label="Monitoring status">
-        <span class="status-badge {{ 'status-success' if watcher.running else ('status-warning' if config.enabled else 'status-neutral') }}">
+        <span id="live-monitoring-status" class="status-badge {{ 'status-success' if watcher.running else ('status-warning' if config.enabled else 'status-neutral') }}">
           Monitoring: {{ 'Active' if watcher.running else ('Ready' if config.enabled else 'Paused') }}
         </span>
         {% if config.safe_mode %}
@@ -44,7 +44,7 @@
       <dl class="fact-grid">
         <div>
           <dt>Next check</dt>
-          <dd>{{ watcher.next_run_display or 'Not scheduled' }}</dd>
+          <dd id="live-next-check">{{ watcher.next_run_display or 'Not scheduled' }}</dd>
         </div>
         <div>
           <dt>Check every</dt>
@@ -56,7 +56,7 @@
         </div>
       </dl>
 
-      <details class="details-box">
+      <details class="details-box" id="live-system-details">
         <summary>System details</summary>
         <dl class="detail-list">
           <div>
@@ -94,19 +94,19 @@
       <div class="service-grid">
         <div class="service-status">
           <div><strong>Google Maps</strong><span>Coordinates for demographics and commute times</span></div>
-          <span class="status-badge status-{{ connections.maps.status_tone }}">{{ connections.maps.status_label }}</span>
+          <span id="live-connection-maps" class="status-badge status-{{ connections.maps.status_tone }}">{{ connections.maps.status_label }}</span>
         </div>
         <div class="service-status">
           <div><strong>Discord</strong><span>Listing notifications</span></div>
-          <span class="status-badge status-{{ connections.discord.status_tone }}">{{ connections.discord.status_label }}</span>
+          <span id="live-connection-discord" class="status-badge status-{{ connections.discord.status_tone }}">{{ connections.discord.status_label }}</span>
         </div>
         <div class="service-status">
           <div><strong>Google Sheets</strong><span>Saved listing history</span></div>
-          <span class="status-badge status-{{ connections.sheets.status_tone }}">{{ connections.sheets.status_label }}</span>
+          <span id="live-connection-sheets" class="status-badge status-{{ connections.sheets.status_tone }}">{{ connections.sheets.status_label }}</span>
         </div>
         <div class="service-status">
           <div><strong>Email</strong><span>Email notifications</span></div>
-          <span class="status-badge status-{{ connections.email.status_tone }}">{{ connections.email.status_label }}</span>
+          <span id="live-connection-email" class="status-badge status-{{ connections.email.status_tone }}">{{ connections.email.status_label }}</span>
         </div>
       </div>
       <details class="details-box connection-priority">
@@ -305,6 +305,7 @@
 
         <fieldset class="settings-group">
           <legend>Home and area</legend>
+          <p class="group-intro">Nearby demographic filters use the configured SCB area data. “Foreign background” is the same percentage shown in listing notifications.</p>
           <div class="form-grid">
             <label><span>Minimum rent</span><input name="filter_minimum_rent" type="number" min="0" value="{{ config.filters.minimum_rent if config.filters.minimum_rent is not none else '' }}"></label>
             <label><span>Maximum rent</span><input name="filter_maximum_rent" type="number" min="0" value="{{ config.filters.maximum_rent if config.filters.maximum_rent is not none else '' }}"></label>
@@ -312,12 +313,13 @@
             <label><span>Maximum rooms</span><input name="filter_maximum_rooms" type="number" min="0" step="0.5" value="{{ config.filters.maximum_rooms if config.filters.maximum_rooms is not none else '' }}"></label>
             <label><span>Minimum area (m²)</span><input name="filter_minimum_area" type="number" min="0" step="0.5" value="{{ config.filters.minimum_area if config.filters.minimum_area is not none else '' }}"></label>
             <label><span>Maximum area (m²)</span><input name="filter_maximum_area" type="number" min="0" step="0.5" value="{{ config.filters.maximum_area if config.filters.maximum_area is not none else '' }}"></label>
-            <label><span>Longest commute (minutes)</span><input name="filter_maximum_commute_minutes" type="number" min="1" value="{{ config.filters.maximum_commute_minutes if config.filters.maximum_commute_minutes is not none else '' }}"></label>
             <label><span>Available from</span><input name="filter_availability_from" type="date" value="{{ config.filters.availability_from or '' }}"></label>
             <label><span>Available by</span><input name="filter_availability_to" type="date" value="{{ config.filters.availability_to or '' }}"></label>
             <label><span>Minimum local population</span><input name="filter_minimum_population" type="number" min="0" value="{{ config.filters.minimum_population if config.filters.minimum_population is not none else '' }}"></label>
             <label><span>Maximum local population</span><input name="filter_maximum_population" type="number" min="0" value="{{ config.filters.maximum_population if config.filters.maximum_population is not none else '' }}"></label>
             <label><span>Maximum average age nearby</span><input name="filter_maximum_average_age" type="number" min="0" step="0.1" value="{{ config.filters.maximum_average_age if config.filters.maximum_average_age is not none else '' }}"></label>
+            <label><span>Minimum foreign background nearby (%)</span><input name="filter_minimum_foreign_background_percent" type="number" min="0" max="100" step="0.1" value="{{ config.filters.minimum_foreign_background_percent if config.filters.minimum_foreign_background_percent is not none else '' }}"></label>
+            <label><span>Maximum foreign background nearby (%)</span><input name="filter_maximum_foreign_background_percent" type="number" min="0" max="100" step="0.1" value="{{ config.filters.maximum_foreign_background_percent if config.filters.maximum_foreign_background_percent is not none else '' }}"></label>
             <label class="wide"><span>Allowed locations <small>Comma-separated or one per line</small></span><textarea name="filter_allowed_locations">{{ config.filters.allowed_locations | join('\n') }}</textarea></label>
             <label class="wide"><span>Excluded locations <small>Comma-separated or one per line</small></span><textarea name="filter_excluded_locations">{{ config.filters.excluded_locations | join('\n') }}</textarea></label>
             <label class="wide"><span>Words that must appear <small>Comma-separated or one per line</small></span><textarea name="filter_required_keywords">{{ config.filters.required_keywords | join('\n') }}</textarea></label>
@@ -543,18 +545,24 @@
       </details>
     </section>
 
-    <section class="panel" aria-labelledby="activity-heading">
+    <section
+      class="panel"
+      id="live-activity"
+      data-activity-version="{{ run_views[0].id if run_views else 0 }}-{{ listing_views[0].id if listing_views else 0 }}-{{ error_views[0].id if error_views else 0 }}-{{ manual_views[0].id if manual_views else 0 }}"
+      aria-labelledby="activity-heading"
+    >
       <div class="section-heading">
         <div>
           <p class="eyebrow">What happened</p>
           <h2 id="activity-heading">Recent activity</h2>
-          <p>Your latest checks, matching homes, and anything that needs attention.</p>
+          <p>Your latest checks, matching homes, and anything that needs attention. Updates automatically while this page is open.</p>
         </div>
       </div>
 
-      <h3 class="subheading">Latest checks</h3>
+      <details class="details-box activity-details" open>
+      <summary>Latest checks{% if run_views %} ({{ run_views | length }}){% endif %}</summary>
       {% if run_views %}
-      <div class="table-scroll">
+      <div class="table-scroll" data-collapsible-list>
         <table>
           <thead>
             <tr>
@@ -568,7 +576,7 @@
           </thead>
           <tbody>
             {% for run in run_views %}
-            <tr id="run-{{ run.id }}">
+            <tr id="run-{{ run.id }}" {% if loop.index > 3 %}hidden data-older-item{% endif %}>
               <td>{{ run.started_display or '—' }}</td>
               <td>
                 <span class="status-badge status-{{ run.status_tone }}">{{ run.status_label }}</span>
@@ -588,15 +596,20 @@
           </tbody>
         </table>
       </div>
+      {% if run_views | length > 3 %}
+      <button type="button" class="button-small button-quiet show-older" data-show-older>Show older checks</button>
+      {% endif %}
       {% else %}
       <p class="empty-state">No checks have run yet.</p>
       {% endif %}
+      </details>
 
-      <h3 class="subheading">Latest homes</h3>
+      <details class="details-box activity-details" open>
+      <summary>Latest homes{% if listing_views %} ({{ listing_views | length }}){% endif %}</summary>
       {% if listing_views %}
-      <div class="listing-list">
+      <div class="listing-list" data-collapsible-list>
         {% for item in listing_views %}
-        <article class="listing-row">
+        <article class="listing-row" {% if loop.index > 3 %}hidden data-older-item{% endif %}>
           <div>
             <a class="listing-link" href="{{ item.url }}">{{ item.address }}</a>
             <span class="cell-note">{{ item.discovered_display }} · {{ item.stage_label }}</span>
@@ -621,9 +634,13 @@
         </article>
         {% endfor %}
       </div>
+      {% if listing_views | length > 3 %}
+      <button type="button" class="button-small button-quiet show-older" data-show-older>Show older homes</button>
+      {% endif %}
       {% else %}
       <p class="empty-state">No homes have been checked yet.</p>
       {% endif %}
+      </details>
 
       <details class="details-box activity-details">
         <summary>Problems and troubleshooting{% if error_views %} ({{ error_views | length }}){% endif %}</summary>
@@ -724,6 +741,6 @@
     </div>
   </dialog>
 
-  <script src="/static/dashboard.js?v=20260716-7" defer></script>
+  <script src="/static/dashboard.js?v=20260716-8" defer></script>
 </body>
 </html>

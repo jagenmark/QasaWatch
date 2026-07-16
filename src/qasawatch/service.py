@@ -828,6 +828,7 @@ class AppService:
         ]
         error_views = [
             {
+                "id": error.id,
                 "run_id": error.run_id,
                 "listing_id": error.listing_id,
                 "occurred_display": _stockholm_time(error.created_at),

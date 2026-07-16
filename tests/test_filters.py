@@ -58,3 +58,39 @@ async def test_boolean_attribute_requirements_are_tri_state_and_auditable():
         "attribute.shared.required_false",
     ]
     assert "missing or does not match" in rejected.reasons[1].message
+
+
+async def test_foreign_background_percentage_filter_uses_scb_output_field():
+    chain = _filters(
+        FilterSettings(
+            minimum_foreign_background_percent=20,
+            maximum_foreign_background_percent=50,
+        )
+    )
+
+    accepted = await chain.evaluate(
+        EnrichedListing(
+            "qasa",
+            "https://example.test/1",
+            "1",
+            {"demographics": {"foreign_background_percent": 46.6}},
+        )
+    )
+    rejected_high = await chain.evaluate(
+        EnrichedListing(
+            "qasa",
+            "https://example.test/2",
+            "2",
+            {"demographics": {"foreign_background_percent": 51}},
+        )
+    )
+    rejected_missing = await chain.evaluate(
+        EnrichedListing("qasa", "https://example.test/3", "3", {})
+    )
+
+    assert accepted.accepted
+    assert not rejected_high.accepted
+    assert not rejected_missing.accepted
+    assert rejected_high.reasons[0].code == (
+        "demographic.foreign_background_percent_outside_range"
+    )

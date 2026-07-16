@@ -25,7 +25,6 @@
     "maximum_rooms": 4,
     "minimum_area": 25,
     "maximum_area": null,
-    "maximum_commute_minutes": 45,
     "allowed_locations": ["Stockholm"],
     "excluded_locations": [],
     "required_keywords": [],
@@ -35,6 +34,8 @@
     "minimum_population": null,
     "maximum_population": null,
     "maximum_average_age": null,
+    "minimum_foreign_background_percent": null,
+    "maximum_foreign_background_percent": null,
     "attribute_requirements": {
       "furnished": false,
       "shared": false
