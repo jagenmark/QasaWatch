@@ -61,7 +61,7 @@ If Chrome crashes, the host only replaces a process it can prove it owns by PID,
 
 ## Configuration and secrets
 
-[config.example.json](config.example.json) is the JSON shape accepted by `PUT /api/config`; it is not auto-loaded from disk. The dashboard stores the same configuration in SQLite. An enabled watcher requires at least two destinations.
+[config.example.json](config.example.json) is the JSON shape accepted by `PUT /api/config`; it is not auto-loaded from disk. The dashboard stores the same configuration in SQLite. An enabled watcher requires at least one commute destination; a second destination is optional.
 
 Bootstrap database/log settings are read directly from environment. Integration secrets are stored as `env:VARIABLE_NAME` references and resolved only in the running process. See [`.env.example`](.env.example); protect the real environment file with `0600` permissions. The public API/dashboard redact secret references and SMTP username.
 

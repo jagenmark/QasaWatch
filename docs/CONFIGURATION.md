@@ -6,7 +6,7 @@
 
 | Field | Meaning |
 | --- | --- |
-| `enabled` | Enables scheduled scans. Two or more destinations are required when true. |
+| `enabled` | Enables scheduled scans. At least one destination is required when true; the second dashboard destination is optional. |
 | `safe_mode` | Blocks production outputs, promotion/retry delivery, grouped-batch resend, and test email. It does not disable results parsing, manual detail inspection, Maps, or local SCB enrichment. Enabled per-listing channels are durably marked skipped for newly accepted safe-mode results, so switching safe mode off cannot backfill old test discoveries. |
 | `qasa_results_url` | Exact HTTPS Qasa results URL. The supplied filtered URL is in the example config. |
 | `base_interval_minutes` / `jitter_minutes` | Cadence of 1-1440 minutes plus/minus 0-120 minutes. |

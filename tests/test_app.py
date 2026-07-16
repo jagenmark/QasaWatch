@@ -56,6 +56,22 @@ def test_filter_attribute_requirements_reject_unknown_keys():
         FilterSettings(attribute_requirements={"unbounded_attribute": True})
 
 
+def test_enabled_watcher_accepts_one_destination_but_not_zero():
+    config = WatcherConfig(
+        enabled=True,
+        destinations=[
+            {
+                "label": "T-Centralen",
+                "address": "T-Centralen, Stockholm",
+                "commute_mode": "arrival",
+            }
+        ],
+    )
+    assert len(config.destinations) == 1
+    with pytest.raises(ValidationError, match="at least one destination"):
+        WatcherConfig(enabled=True)
+
+
 async def test_config_form_persists_false_and_removes_ignored_attribute(tmp_path):
     db = Database(tmp_path / "attribute-form.db")
     await db.initialize()

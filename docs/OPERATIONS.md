@@ -66,7 +66,7 @@ watching and invoke manual processing.
    from the supplied exact filtered URL in `config.example.json`, then copy a
    newly chosen URL if filters change.
 3. Save configuration from [config.example.json](../config.example.json) with
-   real (or controlled test) values. It must have two destinations before an
+   real (or controlled test) values. It must have at least one destination before an
    enabled watcher will validate.
 4. Keep `enabled: false` and `safe_mode: true`; use a manual listing inspection
    and a scan to verify parsing and browser readiness. No output should be sent.

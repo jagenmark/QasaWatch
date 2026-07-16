@@ -133,8 +133,8 @@ class WatcherConfig(BaseModel):
 
     @model_validator(mode="after")
     def enabled_has_destinations(self) -> "WatcherConfig":
-        if self.enabled and len(self.destinations) < 2:
-            raise ValueError("an enabled watcher requires at least two destinations")
+        if self.enabled and not self.destinations:
+            raise ValueError("an enabled watcher requires at least one destination")
         return self
 
 
