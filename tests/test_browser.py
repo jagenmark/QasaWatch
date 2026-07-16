@@ -4,7 +4,12 @@ from dataclasses import asdict, replace
 import pytest
 
 import qasawatch.browser_host as browser_host
-from qasawatch.browser import BrowserScan, QasaDetailEnricher, validate_qasa_url
+from qasawatch.browser import (
+    BrowserScan,
+    QasaBrowser,
+    QasaDetailEnricher,
+    validate_qasa_url,
+)
 from qasawatch.browser_host import (
     BrowserDescriptor,
     BrowserHostError,
@@ -150,6 +155,101 @@ def test_find_chrome_rejects_missing_explicit_executable(tmp_path, monkeypatch):
 
     with pytest.raises(BrowserHostError, match="does not point to a file"):
         find_chrome()
+
+
+def home_search_payload(ids, *, has_next, pages=3, total=6):
+    return {
+        "__qasawatch_operation": "HomeSearch",
+        "payload": {
+            "data": {
+                "homeIndexSearch": {
+                    "documents": {
+                        "nodes": [
+                            {"__typename": "HomeDocument", "id": value}
+                            for value in ids
+                        ],
+                        "hasNextPage": has_next,
+                        "pagesCount": pages,
+                        "totalCount": total,
+                    }
+                }
+            }
+        },
+    }
+
+
+class PaginatedPage:
+    def __init__(self, url, payloads):
+        self.url = url
+        self.payloads = payloads
+        self._qasawatch_captured_json = [payloads[1]]
+
+    async def content(self):
+        return "<html></html>"
+
+    async def goto(self, url, *, wait_until):
+        self.url = url
+        page_number = int(url.split("page=", 1)[1].split("&", 1)[0])
+        self._qasawatch_captured_json.append(self.payloads[page_number])
+
+
+class PaginatedBrowser(QasaBrowser):
+    def __init__(self, payloads):
+        super().__init__(None, sample_interval=0, stable_samples=1)
+        self.payloads = payloads
+
+    async def job(self, url, operation):
+        return await operation(PaginatedPage(url, self.payloads))
+
+
+@pytest.mark.asyncio
+async def test_results_scan_follows_pages_and_stops_after_known_only_page():
+    browser = PaginatedBrowser(
+        {
+            1: home_search_payload(["new-1", "known-1"], has_next=True),
+            2: home_search_payload(["known-2", "known-3"], has_next=True),
+            3: home_search_payload(["old-1"], has_next=False),
+        }
+    )
+
+    scan = await browser.scan(
+        "https://qasa.com/se/sv/find-home",
+        results_only=True,
+        known_listing_ids={"known-1", "known-2", "known-3"},
+        max_pages=10,
+        max_listings=100,
+    )
+
+    assert [item.external_id for item in scan.parsed.listings] == [
+        "new-1",
+        "known-1",
+        "known-2",
+        "known-3",
+    ]
+    assert scan.pages_scanned == 2
+    assert scan.total_available == 6
+    assert not scan.truncated
+
+
+@pytest.mark.asyncio
+async def test_results_scan_honors_listing_cap_before_next_page():
+    browser = PaginatedBrowser(
+        {
+            1: home_search_payload(["one", "two"], has_next=True),
+            2: home_search_payload(["three"], has_next=False),
+        }
+    )
+
+    scan = await browser.scan(
+        "https://qasa.com/se/sv/find-home",
+        results_only=True,
+        max_pages=10,
+        max_listings=2,
+    )
+
+    assert [item.external_id for item in scan.parsed.listings] == ["one", "two"]
+    assert scan.pages_scanned == 1
+    assert scan.truncated
 
 
 def test_linux_startup_requires_graphical_display(tmp_path, monkeypatch):

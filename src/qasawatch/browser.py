@@ -6,13 +6,14 @@ import asyncio
 import json
 import time
 import uuid
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, TypeVar
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from .browser_host import BrowserDescriptor, BrowserHostError, ChromeHost
 from .domain import EnrichedListing, RawListing
-from .parser import ParsedPage, parse_qasa_html
+from .parser import ParsedPage, latest_home_search_page, parse_qasa_html
 from .readiness import PageSample, ReadinessResult, ReadinessState, classify_samples
 
 T = TypeVar("T")
@@ -33,6 +34,9 @@ class BrowserScan:
     parsed: ParsedPage
     readiness: ReadinessResult
     final_url: str
+    pages_scanned: int = 1
+    total_available: int | None = None
+    truncated: bool = False
 
 
 class QasaBrowser:
@@ -135,28 +139,143 @@ class QasaBrowser:
                 await page.close()
 
     async def scan(
-        self, url: str, *, timeout: float = 20.0, results_only: bool = False
+        self,
+        url: str,
+        *,
+        timeout: float = 20.0,
+        results_only: bool = False,
+        known_listing_ids: Collection[str] = (),
+        max_pages: int = 1,
+        max_listings: int | None = None,
     ) -> BrowserScan:
         async def operation(page: Any) -> BrowserScan:
-            deadline = time.monotonic() + timeout
-            samples: list[PageSample] = []
-            latest: ParsedPage | None = None
-            result = classify_samples(())
-            while time.monotonic() < deadline:
-                latest = parse_qasa_html(
-                    await page.content(), base_url=page.url,
-                    captured_json=getattr(page, "_qasawatch_captured_json", ()),
-                    results_only=results_only,
+            async def wait_until_stable(
+                *, minimum_search_responses: int = 0
+            ) -> tuple[ParsedPage, ReadinessResult]:
+                deadline = time.monotonic() + timeout
+                samples: list[PageSample] = []
+                latest: ParsedPage | None = None
+                result = classify_samples(())
+                while time.monotonic() < deadline:
+                    captured = getattr(page, "_qasawatch_captured_json", ())
+                    if (
+                        results_only
+                        and _home_search_response_count(captured)
+                        < minimum_search_responses
+                    ):
+                        await asyncio.sleep(self.sample_interval)
+                        continue
+                    latest = parse_qasa_html(
+                        await page.content(),
+                        base_url=page.url,
+                        captured_json=captured,
+                        results_only=results_only,
+                    )
+                    keys = tuple(
+                        sorted(item.external_id or item.url for item in latest.listings)
+                    )
+                    samples.append(
+                        PageSample(
+                            page.url,
+                            keys,
+                            latest.explicit_empty,
+                            latest.loading,
+                            latest.auth_required,
+                            latest.captcha,
+                            latest.errors[0] if latest.errors and not keys else None,
+                        )
+                    )
+                    result = classify_samples(
+                        samples, stable_samples=self.stable_samples
+                    )
+                    if result.complete or result.state in (
+                        ReadinessState.AUTH_REQUIRED,
+                        ReadinessState.CAPTCHA,
+                        ReadinessState.ERROR,
+                    ):
+                        return latest, result
+                    await asyncio.sleep(self.sample_interval)
+                return latest or ParsedPage(()), result
+
+            latest, result = await wait_until_stable()
+            if not results_only or not result.complete:
+                return BrowserScan(latest, result, page.url)
+
+            known = {str(value) for value in known_listing_ids}
+            page_info = latest_home_search_page(
+                getattr(page, "_qasawatch_captured_json", ())
+            )
+            pages_scanned = 1
+            total_available = page_info.total_count if page_info else None
+            capped_pages = max(1, max_pages)
+            truncated = False
+
+            while page_info is not None and page_info.has_next_page:
+                if page_info.listing_ids and all(
+                    listing_id in known for listing_id in page_info.listing_ids
+                ):
+                    break
+                if pages_scanned >= capped_pages:
+                    truncated = True
+                    break
+                if max_listings is not None and len(latest.listings) >= max_listings:
+                    truncated = True
+                    break
+                next_page = _page_number(page.url) + 1
+                expected_responses = (
+                    _home_search_response_count(
+                        getattr(page, "_qasawatch_captured_json", ())
+                    )
+                    + 1
                 )
-                keys = tuple(sorted(item.external_id or item.url for item in latest.listings))
-                samples.append(PageSample(page.url, keys, latest.explicit_empty, latest.loading,
-                                          latest.auth_required, latest.captcha,
-                                          latest.errors[0] if latest.errors and not keys else None))
-                result = classify_samples(samples, stable_samples=self.stable_samples)
-                if result.complete or result.state in (ReadinessState.AUTH_REQUIRED, ReadinessState.CAPTCHA, ReadinessState.ERROR):
-                    return BrowserScan(latest, result, page.url)
-                await asyncio.sleep(self.sample_interval)
-            return BrowserScan(latest or ParsedPage(()), result, page.url)
+                await page.goto(
+                    _results_page_url(page.url, next_page),
+                    wait_until="domcontentloaded",
+                )
+                validate_qasa_url(page.url)
+                latest, result = await wait_until_stable(
+                    minimum_search_responses=expected_responses
+                )
+                pages_scanned += 1
+                if not result.complete:
+                    return BrowserScan(
+                        latest,
+                        result,
+                        page.url,
+                        pages_scanned,
+                        total_available,
+                        truncated,
+                    )
+                page_info = latest_home_search_page(
+                    getattr(page, "_qasawatch_captured_json", ())
+                )
+                if page_info and page_info.total_count is not None:
+                    total_available = page_info.total_count
+
+            if max_listings is not None and len(latest.listings) > max_listings:
+                latest = ParsedPage(
+                    latest.listings[:max_listings],
+                    latest.explicit_empty,
+                    latest.loading,
+                    latest.auth_required,
+                    latest.captcha,
+                    latest.errors,
+                )
+                truncated = True
+                keys = tuple(
+                    sorted(item.external_id or item.url for item in latest.listings)
+                )
+                result = ReadinessResult(
+                    ReadinessState.READY, "stable paginated listing results", keys
+                )
+            return BrowserScan(
+                latest,
+                result,
+                page.url,
+                pages_scanned,
+                total_available,
+                truncated,
+            )
         return await self.job(url, operation)
 
 
@@ -212,3 +331,35 @@ class QasaDetailEnricher:
             external_id=detail.external_id or listing.external_id,
             data=data,
         )
+
+
+def _page_number(url: str) -> int:
+    try:
+        query = dict(parse_qsl(urlparse(url).query, keep_blank_values=True))
+        return max(
+            1,
+            int(query.get("page", "1")),
+        )
+    except ValueError:
+        return 1
+
+
+def _results_page_url(url: str, page: int) -> str:
+    parsed = urlparse(url)
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key != "page"
+    ]
+    if page > 1:
+        query.append(("page", str(page)))
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
+def _home_search_response_count(captured_json: Collection[Any]) -> int:
+    return sum(
+        1
+        for captured in captured_json
+        if isinstance(captured, dict)
+        and captured.get("__qasawatch_operation") == "HomeSearch"
+    )

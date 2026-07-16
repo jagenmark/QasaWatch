@@ -9,6 +9,7 @@
 | `enabled` | Enables scheduled scans. Commute destinations are optional. |
 | `safe_mode` | Blocks production outputs, promotion/retry delivery, grouped-batch resend, and test email. Watcher scans still parse, enrich, filter, and report run counts, but do not create watcher listings, deduplication history, or delivery records. A listing first seen in safe mode remains new when a later production scan sees it. Manual detail inspection keeps its separate review history. |
 | `qasa_results_url` | Exact HTTPS Qasa results URL. The supplied filtered URL is in the example config. |
+| `max_result_pages` / `max_result_listings` | Bounded Qasa pagination. Defaults to 5 pages and 250 listings per check. Production scans stop earlier when a complete page contains only listing IDs already stored by QasaWatch. |
 | `base_interval_minutes` / `jitter_minutes` | Cadence of 1-1440 minutes plus/minus 0-120 minutes. |
 | `destinations` | Optional list of any length. Each item has `label`, `address`, `commute_mode` (`arrival`/`departure`), and optional `maximum_commute_minutes`. |
 | `filters` | Rent, rooms, area, commute, locations, keywords, availability, demographic limits, and tri-state listing-attribute requirements. |
@@ -19,7 +20,7 @@ marked `skipped` by the previous safe-mode behavior. Those legacy rows remain
 suppressed intentionally; the upgrade does not auto-send old notifications.
 Requeue them only through an explicit, reviewed retry or manual promotion.
 
-Each watcher scan opens one temporary tab for the configured rendered results page, captures its first-party HomeSearch response, parses only actual `HomeDocument` listings, and closes the tab. It does not open every listing. Manual URL inspection still renders the submitted detail page. Commutes use the next strict future weekday at 08:00 in `Europe/Stockholm`. Arrival destinations get an 08:00 arrival time; departure destinations get an 08:00 departure time.
+Each watcher scan opens one temporary tab for the configured rendered results page, captures its first-party HomeSearch response, and follows Qasa's numbered result pages within the configured caps. It parses only actual `HomeDocument` listings and closes the tab. Production scans stop paging after a complete page contains no unseen listing IDs. Newly discovered listings may still be opened individually by the detail enrichment stage. Manual URL inspection renders only the submitted detail page. Commutes use the next strict future weekday at 08:00 in `Europe/Stockholm`. Arrival destinations get an 08:00 arrival time; departure destinations get an 08:00 departure time.
 
 The dashboard provides ordinary controls for destinations, filters, listing
 attributes, Sheets, Discord, SMTP email, and the main SCB dataset fields.

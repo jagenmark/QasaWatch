@@ -179,6 +179,8 @@
   const refreshButton = dialog.querySelector("#refresh-after-run");
   const fields = {
     found: dialog.querySelector("#run-result-found"),
+    total_available: dialog.querySelector("#run-result-total-available"),
+    pages_scanned: dialog.querySelector("#run-result-pages-scanned"),
     new: dialog.querySelector("#run-result-new"),
     accepted: dialog.querySelector("#run-result-accepted"),
     rejected: dialog.querySelector("#run-result-rejected"),
@@ -243,10 +245,18 @@
       }
 
       title.textContent = "Check complete";
-      message.textContent =
-        Number(result.new || 0) > 0
-          ? "New listings were found. Refresh the activity section to see the latest details."
-          : "The saved search was checked successfully. No new listings were found.";
+      if (result.truncated) {
+        message.textContent =
+          `Checked ${Number(result.found || 0).toLocaleString()} of ` +
+          `${Number(result.total_available || 0).toLocaleString()} Qasa listings ` +
+          `across ${Number(result.pages_scanned || 0).toLocaleString()} pages. ` +
+          "Increase the pagination limits in Search settings to inspect more.";
+      } else {
+        message.textContent =
+          Number(result.new || 0) > 0
+            ? "New listings were found. Refresh the activity section to see the latest details."
+            : "The saved search was checked successfully. No new listings were found.";
+      }
       Object.entries(fields).forEach(([name, element]) => {
         element.textContent = Number(result[name] || 0).toLocaleString();
       });

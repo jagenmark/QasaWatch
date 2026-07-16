@@ -15,10 +15,10 @@ restrictions, missed or incorrect listings, unwanted notifications, costs from
 connected services, or any other outcome from using this project.
 
 Qasa can be strict about automated access. QasaWatch is consciously designed
-with that in mind: it checks one saved results page at a time, avoids opening
-every listing during automatic checks, supports timing variation between
-checks, and stops for login pages, CAPTCHAs, or incomplete results instead of
-trying to bypass them. These precautions reduce unnecessary activity, but they
+with that in mind: it checks one saved search at a time, follows only a bounded
+number of result pages, avoids reopening known listings, supports timing
+variation between checks, and stops for login pages, CAPTCHAs, or incomplete
+results instead of trying to bypass them. These precautions reduce unnecessary activity, but they
 cannot guarantee that Qasa will permit or ignore its use.
 
 To the author's knowledge, no user has reported an account or access problem

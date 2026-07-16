@@ -70,6 +70,14 @@ class ParsedPage:
     errors: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class SearchPageInfo:
+    listing_ids: tuple[str, ...]
+    has_next_page: bool = False
+    pages_count: int | None = None
+    total_count: int | None = None
+
+
 class _Document(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -385,6 +393,45 @@ def _home_search_nodes(captured: Any) -> tuple[Mapping[str, Any], ...]:
         for node in nodes
         if isinstance(node, Mapping) and node.get("__typename") == "HomeDocument"
     )
+
+
+def latest_home_search_page(captured_json: Iterable[Any]) -> SearchPageInfo | None:
+    """Return pagination metadata from the latest authoritative HomeSearch response."""
+
+    latest: SearchPageInfo | None = None
+    for captured in captured_json:
+        operation = None
+        payload = captured
+        if isinstance(captured, Mapping) and "__qasawatch_operation" in captured:
+            operation = captured.get("__qasawatch_operation")
+            payload = captured.get("payload")
+        if operation not in (None, "HomeSearch") or not isinstance(payload, Mapping):
+            continue
+        try:
+            documents = payload["data"]["homeIndexSearch"]["documents"]
+        except (KeyError, TypeError):
+            continue
+        if not isinstance(documents, Mapping):
+            continue
+        nodes = documents.get("nodes")
+        if not isinstance(nodes, list):
+            continue
+        listing_ids = tuple(
+            str(node["id"])
+            for node in nodes
+            if isinstance(node, Mapping)
+            and node.get("__typename") == "HomeDocument"
+            and node.get("id") not in (None, "")
+        )
+        pages_count = _number(documents.get("pagesCount"), integer=True)
+        total_count = _number(documents.get("totalCount"), integer=True)
+        latest = SearchPageInfo(
+            listing_ids=listing_ids,
+            has_next_page=documents.get("hasNextPage") is True,
+            pages_count=int(pages_count) if pages_count is not None else None,
+            total_count=int(total_count) if total_count is not None else None,
+        )
+    return latest
 
 
 def _fill_text(listing: ParsedListing, text: str, source: str) -> None:

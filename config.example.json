@@ -2,6 +2,8 @@
   "enabled": false,
   "safe_mode": true,
   "qasa_results_url": "https://qasa.com/se/sv/find-home?ne_lat=59.395990187569225&ne_lng=18.166765064212683&sw_lat=59.29144514172344&sw_lng=17.958198610912206&maxRoomCount=3&maxMonthlyCost=10300&minSquareMeters=25&minRentalLength=15778476&sharedHome=privateHome",
+  "max_result_pages": 5,
+  "max_result_listings": 250,
   "base_interval_minutes": 15,
   "jitter_minutes": 3,
   "destinations": [
