@@ -152,10 +152,15 @@ off for a deliberately selected output test.
 
 An explicit manual email promotion is always one message for that reviewed
 listing, even when watcher email is configured as one grouped message per scan.
-Safe watcher scans durably mark all supported per-listing outputs as skipped, so a
-later production scan will not backfill notifications for those test discoveries.
-After safe mode is disabled, explicit promotion/retry is the only operation that
-can reset the selected skipped channels and deliberately send them.
+Safe watcher scans are transient dry runs: they report parsing, enrichment and
+filter outcomes in the run statistics but create no watcher listing,
+deduplication, or delivery records. A listing first encountered during a safe
+scan is consequently still new when it is later encountered in production.
+
+On an upgraded database, legacy safe-mode delivery tombstones remain skipped.
+They are not automatically backfilled because doing so could unexpectedly send
+many old notifications. Review individual listings and use explicit retry or
+promotion when an old delivery should be sent.
 
 Each delivery record has durable state and a stable idempotency key. Application
 startup calls `recover_interrupted_work()`. Interrupted Sheets deliveries return

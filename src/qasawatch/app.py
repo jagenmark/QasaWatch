@@ -20,6 +20,13 @@ from .service import AppService, IncompletePageError
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).with_name("templates")))
 
 
+def _json_object(value: str, label: str) -> dict:
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{label} JSON must contain an object")
+    return parsed
+
+
 def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI:
     if service.scheduler is None:
         service.scheduler = WatchScheduler(service.database, service.config_store, service.run_watcher)
@@ -108,19 +115,99 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
         attribute_senior_home: str | None = Form(None),
         attribute_instant_sign: str | None = Form(None),
         attribute_corporate_home: str | None = Form(None),
+        filter_minimum_rent: str | None = Form(None),
+        filter_maximum_rent: str | None = Form(None),
+        filter_minimum_rooms: str | None = Form(None),
+        filter_maximum_rooms: str | None = Form(None),
+        filter_minimum_area: str | None = Form(None),
+        filter_maximum_area: str | None = Form(None),
+        filter_maximum_commute_minutes: str | None = Form(None),
+        filter_allowed_locations: str | None = Form(None),
+        filter_excluded_locations: str | None = Form(None),
+        filter_required_keywords: str | None = Form(None),
+        filter_excluded_keywords: str | None = Form(None),
+        filter_availability_from: str | None = Form(None),
+        filter_availability_to: str | None = Form(None),
+        filter_minimum_population: str | None = Form(None),
+        filter_maximum_population: str | None = Form(None),
+        filter_maximum_average_age: str | None = Form(None),
+        sheets_enabled: bool = Form(False),
+        sheets_spreadsheet_id: str | None = Form(None),
+        sheets_worksheet: str | None = Form(None),
+        discord_enabled: bool = Form(False),
+        email_enabled: bool = Form(False),
+        email_recipients: str | None = Form(None),
+        email_sender: str | None = Form(None),
+        email_smtp_mode: str | None = Form(None),
+        email_smtp_host: str | None = Form(None),
+        email_smtp_port: str | None = Form(None),
+        email_smtp_username: str | None = Form(None),
+        email_clear_smtp_username: bool = Form(False),
+        email_delivery_mode: str | None = Form(None),
+        email_send_no_new: bool = Form(False),
+        email_subject: str | None = Form(None),
+        scb_data_path: str | None = Form(None),
+        scb_id_column: str | None = Form(None),
+        scb_name_column: str | None = Form(None),
+        scb_vintage: str | None = Form(None),
+        scb_crs: str | None = Form(None),
     ):
         try:
             existing = await service.get_config()
             # Secret references are retained server-side because the form never renders them.
-            sheets = {**existing.sheets.model_dump(), **json.loads(sheets_json)}
-            discord = {**existing.discord.model_dump(), **json.loads(discord_json)}
-            email = {**existing.email.model_dump(), **json.loads(email_json)}
+            sheets = {
+                **existing.sheets.model_dump(),
+                **_json_object(sheets_json, "Sheets"),
+            }
+            discord = {
+                **existing.discord.model_dump(),
+                **_json_object(discord_json, "Discord"),
+            }
+            email = {
+                **existing.email.model_dump(),
+                **_json_object(email_json, "Email"),
+            }
             if sheets_credentials_secret_ref.strip():
                 sheets["credentials_secret_ref"] = sheets_credentials_secret_ref.strip()
             if discord_webhook_secret_ref.strip():
                 discord["webhook_secret_ref"] = discord_webhook_secret_ref.strip()
             if smtp_secret_ref.strip():
                 email["smtp_secret_ref"] = smtp_secret_ref.strip()
+            if sheets_spreadsheet_id is not None:
+                sheets.update({
+                    "enabled": sheets_enabled,
+                    "spreadsheet_id": sheets_spreadsheet_id.strip(),
+                    "worksheet": (sheets_worksheet or "Listings").strip() or "Listings",
+                })
+            if discord_enabled or discord_webhook_secret_ref or "enabled" in discord:
+                discord["enabled"] = discord_enabled
+            if email_sender is not None:
+                recipients = [
+                    item.strip()
+                    for item in email_recipients.replace(";", ",").replace("\n", ",").split(",")
+                    if item.strip()
+                ] if email_recipients is not None else []
+                delivery_mode = (email_delivery_mode or "grouped").strip()
+                email.update({
+                    "enabled": email_enabled,
+                    "recipients": recipients,
+                    "sender": email_sender.strip(),
+                    "smtp_mode": (email_smtp_mode or "starttls").strip(),
+                    "smtp_host": (email_smtp_host or "").strip(),
+                    "smtp_port": int((email_smtp_port or "587").strip()),
+                    "smtp_username": (
+                        (email_smtp_username or "").strip()
+                        or (
+                            None
+                            if email_clear_smtp_username
+                            else existing.email.smtp_username
+                        )
+                    ),
+                    "grouped": delivery_mode == "grouped",
+                    "per_listing": delivery_mode == "per_listing",
+                    "send_no_new": email_send_no_new,
+                    "subject": (email_subject or "").strip() or "QasaWatch: {count} new listings",
+                })
             destination_controls = (
                 (destination_1_label, destination_1_address, destination_1_mode, destination_1_maximum),
                 (destination_2_label, destination_2_address, destination_2_mode, destination_2_maximum),
@@ -143,9 +230,36 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
                     })
             else:
                 destinations = json.loads(destinations_json)
-            filters = json.loads(filters_json)
-            if not isinstance(filters, dict):
-                raise ValueError("filters_json must contain a JSON object")
+            filters = _json_object(filters_json, "Filters")
+            filter_controls = {
+                "minimum_rent": (filter_minimum_rent, int),
+                "maximum_rent": (filter_maximum_rent, int),
+                "minimum_rooms": (filter_minimum_rooms, float),
+                "maximum_rooms": (filter_maximum_rooms, float),
+                "minimum_area": (filter_minimum_area, float),
+                "maximum_area": (filter_maximum_area, float),
+                "maximum_commute_minutes": (filter_maximum_commute_minutes, int),
+                "minimum_population": (filter_minimum_population, int),
+                "maximum_population": (filter_maximum_population, int),
+                "maximum_average_age": (filter_maximum_average_age, float),
+            }
+            if any(value is not None for value, _ in filter_controls.values()):
+                for key, (raw_value, converter) in filter_controls.items():
+                    value = (raw_value or "").strip()
+                    filters[key] = converter(value) if value else None
+                for key, raw_value in {
+                    "allowed_locations": filter_allowed_locations,
+                    "excluded_locations": filter_excluded_locations,
+                    "required_keywords": filter_required_keywords,
+                    "excluded_keywords": filter_excluded_keywords,
+                }.items():
+                    filters[key] = [
+                        item.strip()
+                        for item in (raw_value or "").replace(";", ",").replace("\n", ",").split(",")
+                        if item.strip()
+                    ]
+                filters["availability_from"] = (filter_availability_from or "").strip() or None
+                filters["availability_to"] = (filter_availability_to or "").strip() or None
             attribute_requirements = dict(filters.get("attribute_requirements") or {})
             attribute_controls = {
                 "furnished": attribute_furnished,
@@ -170,11 +284,23 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
                 else:
                     raise ValueError(f"invalid attribute requirement for {key}")
             filters["attribute_requirements"] = attribute_requirements
+            scb = {
+                **existing.scb.model_dump(),
+                **_json_object(scb_json, "SCB"),
+            }
+            if scb_data_path is not None:
+                scb.update({
+                    "data_path": scb_data_path.strip(),
+                    "id_column": (scb_id_column or "").strip() or "municipality_id",
+                    "name_column": (scb_name_column or "").strip() or "municipality_name",
+                    "vintage": (scb_vintage or "").strip(),
+                    "crs": (scb_crs or "").strip() or "EPSG:4326",
+                })
             config = WatcherConfig(
                 enabled=enabled, qasa_results_url=qasa_results_url,
                 base_interval_minutes=base_interval_minutes, jitter_minutes=jitter_minutes,
                 destinations=destinations, filters=filters,
-                sheets=sheets, discord=discord, email=email, scb=json.loads(scb_json), safe_mode=safe_mode,
+                sheets=sheets, discord=discord, email=email, scb=scb, safe_mode=safe_mode,
                 maps_api_secret_ref=(
                     maps_api_secret_ref.strip()
                     or existing.maps_api_secret_ref

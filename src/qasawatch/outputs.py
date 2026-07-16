@@ -37,6 +37,17 @@ def listing_summary(listing: ListingSnapshot) -> dict[str, str]:
         text = str(value)
         return text[:10] if len(text) >= 10 and text[4:5] == "-" and text[7:8] == "-" else text
 
+    def furnished_value(value: Any) -> str:
+        if isinstance(value, bool):
+            return "Furnished" if value else "Unfurnished"
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "yes", "1", "furnished", "möblerat"}:
+                return "Furnished"
+            if normalized in {"false", "no", "0", "unfurnished", "omöblerat"}:
+                return "Unfurnished"
+        return ""
+
     commute_values = data.get("commutes") or ({"destination": data["commute"]} if isinstance(data.get("commute"), Mapping) else {})
     commute = "; ".join(
         f"{name}: {round(value['duration_seconds'] / 60)} min" if isinstance(value, Mapping) and value.get("duration_seconds") is not None else f"{name}: {value.get('status', 'unknown') if isinstance(value, Mapping) else 'unknown'}"
@@ -47,6 +58,22 @@ def listing_summary(listing: ListingSnapshot) -> dict[str, str]:
     filter_value = data.get("filter_result", data.get("filter", "accepted" if listing.stage.value == "accepted" else listing.stage.value))
     if isinstance(filter_value, Mapping):
         filter_value = filter_value.get("status", filter_value.get("accepted", filter_value))
+    rental_start = date_only(data["rental_start"]) if data.get("rental_start") else ""
+    rental_end = date_only(data["rental_end"]) if data.get("rental_end") else ""
+    availability = str(data.get("availability", "")).strip().lower()
+    open_ended = availability in {
+        "until_further_notice",
+        "tillsvidare",
+        "until further notice",
+        "open_ended",
+    }
+    rental_period = (
+        f"{rental_start} → {rental_end}"
+        if rental_start and rental_end
+        else "Tillsvidare"
+        if rental_start and open_ended
+        else rental_end
+    )
     return {
         "title": str(data.get("title") or data.get("address") or f"Listing {listing.id}"),
         "address": str(data.get("address") or ""),
@@ -57,10 +84,9 @@ def listing_summary(listing: ListingSnapshot) -> dict[str, str]:
             str(data.get(key)) for key in ("latitude", "longitude")
             if data.get(key) is not None
         ),
-        "rental_period": " → ".join(
-            date_only(data.get(key)) for key in ("rental_start", "rental_end")
-            if data.get(key)
-        ),
+        "rental_period": rental_period,
+        "move_in_date": rental_start,
+        "furnished": furnished_value(data.get("furnished")),
         "duration": str(data.get("duration", "")),
         "availability": str(data.get("availability", "")),
         "published": str(data.get("published_at", data.get("published", ""))),
@@ -238,15 +264,22 @@ class DiscordWebhookOutput:
             ("Kvm", f'{summary["area"]} m²' if summary["area"] else ""),
             ("Plats/adress", summary["address"]),
             ("Rum", summary["rooms"]),
+            (
+                "Möblerat",
+                "Möblerat"
+                if summary["furnished"] == "Furnished"
+                else "Omöblerat"
+                if summary["furnished"] == "Unfurnished"
+                else "",
+            ),
         ):
             if value:
                 lines.append(f"{label}: {value}")
 
-        rental_period = summary["rental_period"]
-        if data.get("rental_start") and not data.get("rental_end"):
-            rental_period = f"{summary['rental_period']} - Tillsvidare"
-        if rental_period:
-            lines.append(f"Uthyrningsperiod: {rental_period}")
+        if summary["rental_period"]:
+            lines.append(f"Uthyrningsperiod: {summary['rental_period']}")
+        if summary["move_in_date"]:
+            lines.append(f"Inflyttningsdatum: {summary['move_in_date']}")
 
         commutes = data.get("commutes")
         if not isinstance(commutes, Mapping) and isinstance(data.get("commute"), Mapping):

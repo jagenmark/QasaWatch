@@ -18,13 +18,71 @@
 <label>08:00 means<select name="destination_{{ number }}_mode"><option value="arrival"{% if destination.get('commute_mode', 'arrival') == 'arrival' %} selected{% endif %}>Arrive by 08:00</option><option value="departure"{% if destination.get('commute_mode') == 'departure' %} selected{% endif %}>Depart at 08:00</option></select></label>
 <label>Maximum commute (minutes, optional)<input name="destination_{{ number }}_maximum" type="number" min="1" value="{{ destination.get('maximum_commute_minutes') or '' }}"></label>
 </fieldset>{% endfor %}
-<label>Filters JSON (advanced)<textarea name="filters_json">{{ config.filters | tojson }}</textarea></label>
+<fieldset class="config-card"><legend>Filters</legend><div class="form-grid">
+<label>Minimum rent<input name="filter_minimum_rent" type="number" min="0" value="{{ config.filters.minimum_rent if config.filters.minimum_rent is not none else '' }}"></label>
+<label>Maximum rent<input name="filter_maximum_rent" type="number" min="0" value="{{ config.filters.maximum_rent if config.filters.maximum_rent is not none else '' }}"></label>
+<label>Minimum rooms<input name="filter_minimum_rooms" type="number" min="0" step="0.5" value="{{ config.filters.minimum_rooms if config.filters.minimum_rooms is not none else '' }}"></label>
+<label>Maximum rooms<input name="filter_maximum_rooms" type="number" min="0" step="0.5" value="{{ config.filters.maximum_rooms if config.filters.maximum_rooms is not none else '' }}"></label>
+<label>Minimum area (m²)<input name="filter_minimum_area" type="number" min="0" step="0.5" value="{{ config.filters.minimum_area if config.filters.minimum_area is not none else '' }}"></label>
+<label>Maximum area (m²)<input name="filter_maximum_area" type="number" min="0" step="0.5" value="{{ config.filters.maximum_area if config.filters.maximum_area is not none else '' }}"></label>
+<label>Maximum commute (minutes)<input name="filter_maximum_commute_minutes" type="number" min="1" value="{{ config.filters.maximum_commute_minutes if config.filters.maximum_commute_minutes is not none else '' }}"></label>
+<label>Available from<input name="filter_availability_from" type="date" value="{{ config.filters.availability_from or '' }}"></label>
+<label>Available no later than<input name="filter_availability_to" type="date" value="{{ config.filters.availability_to or '' }}"></label>
+<label>Minimum population<input name="filter_minimum_population" type="number" min="0" value="{{ config.filters.minimum_population if config.filters.minimum_population is not none else '' }}"></label>
+<label>Maximum population<input name="filter_maximum_population" type="number" min="0" value="{{ config.filters.maximum_population if config.filters.maximum_population is not none else '' }}"></label>
+<label>Maximum average age<input name="filter_maximum_average_age" type="number" min="0" step="0.1" value="{{ config.filters.maximum_average_age if config.filters.maximum_average_age is not none else '' }}"></label>
+</div>
+<label>Allowed locations <span class="hint">(comma or one per line)</span><textarea name="filter_allowed_locations">{{ config.filters.allowed_locations | join('\n') }}</textarea></label>
+<label>Excluded locations <span class="hint">(comma or one per line)</span><textarea name="filter_excluded_locations">{{ config.filters.excluded_locations | join('\n') }}</textarea></label>
+<label>Required keywords <span class="hint">(comma or one per line)</span><textarea name="filter_required_keywords">{{ config.filters.required_keywords | join('\n') }}</textarea></label>
+<label>Excluded keywords <span class="hint">(comma or one per line)</span><textarea name="filter_excluded_keywords">{{ config.filters.excluded_keywords | join('\n') }}</textarea></label>
+</fieldset>
 {% set attributes = config.filters.attribute_requirements %}
-<fieldset><legend>Listing attributes</legend><p>Choose whether each listing attribute is ignored, required, or forbidden.</p>
+<fieldset class="config-card"><legend>Listing attributes</legend><p>Choose whether each listing attribute is ignored, required, or forbidden.</p>
 {% for key, label in [('furnished', 'Furnished'), ('shared', 'Shared home'), ('pets_allowed', 'Pets allowed'), ('smoking_allowed', 'Smoking allowed'), ('wheelchair_accessible', 'Wheelchair accessible'), ('first_hand', 'First-hand contract'), ('student_home', 'Student home'), ('senior_home', 'Senior home'), ('instant_sign', 'Instant sign'), ('corporate_home', 'Corporate home')] %}
 <label>{{ label }}<select name="attribute_{{ key }}"><option value="ignore"{% if key not in attributes %} selected{% endif %}>Ignore</option><option value="true"{% if attributes.get(key) is sameas true %} selected{% endif %}>Require yes</option><option value="false"{% if attributes.get(key) is sameas false %} selected{% endif %}>Require no</option></select></label>
 {% endfor %}</fieldset>
-<label>Sheets JSON<textarea name="sheets_json">{{ config.sheets | tojson }}</textarea></label><label>Discord JSON<textarea name="discord_json">{{ config.discord | tojson }}</textarea></label><label>Email JSON<textarea name="email_json">{{ config.email | tojson }}</textarea></label><label>SCB path/mapping JSON<textarea name="scb_json">{{ config.scb | tojson }}</textarea></label><label>Google Maps secret reference<input type="password" name="maps_api_secret_ref" placeholder="env:QASAWATCH_GOOGLE_MAPS_API_KEY"></label><label>Sheets credential reference<input type="password" name="sheets_credentials_secret_ref" placeholder="env:QASAWATCH_GOOGLE_SERVICE_ACCOUNT_JSON"></label><label>Discord webhook reference<input type="password" name="discord_webhook_secret_ref" placeholder="env:QASAWATCH_DISCORD_WEBHOOK_URL"></label><label>SMTP password reference<input type="password" name="smtp_secret_ref" placeholder="env:QASAWATCH_SMTP_PASSWORD"></label><button>Save configuration</button></form><p>Credential values and references are never redisplayed. Status only: Maps {{ config.maps_secret_configured }}, Sheets {{ config.sheets.secret_configured }}, Discord {{ config.discord.secret_configured }}, SMTP {{ config.email.secret_configured }}.</p></section>
+<fieldset class="config-card"><legend>Google Sheets</legend>
+<label><input type="checkbox" name="sheets_enabled" {% if config.sheets.enabled %}checked{% endif %}> Enable Google Sheets output</label>
+<label>Spreadsheet ID<input name="sheets_spreadsheet_id" value="{{ config.sheets.spreadsheet_id }}"></label>
+<label>Worksheet<input name="sheets_worksheet" value="{{ config.sheets.worksheet }}"></label>
+<label>Credential reference<input type="password" name="sheets_credentials_secret_ref" placeholder="env:QASAWATCH_GOOGLE_SERVICE_ACCOUNT_JSON"></label>
+</fieldset>
+<fieldset class="config-card"><legend>Discord</legend>
+<label><input type="checkbox" name="discord_enabled" {% if config.discord.enabled %}checked{% endif %}> Enable Discord notifications</label>
+<label>Webhook reference<input type="password" name="discord_webhook_secret_ref" placeholder="env:QASAWATCH_DISCORD_WEBHOOK_URL"></label>
+<p class="hint">The webhook value stays in the environment and is never redisplayed.</p>
+</fieldset>
+<fieldset class="config-card wide"><legend>Email notifications</legend><div class="form-grid">
+<label><input type="checkbox" name="email_enabled" {% if config.email.enabled %}checked{% endif %}> Enable email notifications</label>
+<label>Delivery style<select name="email_delivery_mode"><option value="grouped"{% if config.email.grouped %} selected{% endif %}>One grouped email per scan</option><option value="per_listing"{% if config.email.per_listing %} selected{% endif %}>One email per listing</option></select></label>
+<label>Recipients <span class="hint">(comma or one per line)</span><textarea name="email_recipients">{{ config.email.recipients | join('\n') }}</textarea></label>
+<label>Sender email<input name="email_sender" type="email" value="{{ config.email.sender }}"></label>
+<label>SMTP host<input name="email_smtp_host" value="{{ config.email.smtp_host }}"></label>
+<label>SMTP port<input name="email_smtp_port" type="number" min="1" max="65535" value="{{ config.email.smtp_port }}"></label>
+<label>Security<select name="email_smtp_mode"><option value="starttls"{% if config.email.smtp_mode == 'starttls' %} selected{% endif %}>STARTTLS (usually port 587)</option><option value="tls"{% if config.email.smtp_mode == 'tls' %} selected{% endif %}>TLS/SSL (usually port 465)</option><option value="plain"{% if config.email.smtp_mode == 'plain' %} selected{% endif %}>Plain (trusted local relay only)</option></select></label>
+<label>SMTP username<input name="email_smtp_username" value="" placeholder="{{ 'Configured — enter to replace' if config.email.username_configured else 'Leave blank to use sender email' }}"></label>
+<label><input type="checkbox" name="email_clear_smtp_username"> Clear saved SMTP username and use sender email</label>
+<label>SMTP password reference<input type="password" name="smtp_secret_ref" placeholder="env:QASAWATCH_SMTP_PASSWORD"></label>
+<label>Subject template<input name="email_subject" value="{{ config.email.subject }}"></label>
+<label><input type="checkbox" name="email_send_no_new" {% if config.email.send_no_new %}checked{% endif %}> Send an email when no new listing is accepted</label>
+</div></fieldset>
+<fieldset class="config-card"><legend>SCB demographics</legend>
+<label>Dataset path<input name="scb_data_path" value="{{ config.scb.data_path }}"></label>
+<label>Area ID column<input name="scb_id_column" value="{{ config.scb.id_column }}"></label>
+<label>Area name column<input name="scb_name_column" value="{{ config.scb.name_column }}"></label>
+<label>Vintage/year<input name="scb_vintage" value="{{ config.scb.vintage }}"></label>
+<label>Coordinate system<input name="scb_crs" value="{{ config.scb.crs }}"></label>
+</fieldset>
+<fieldset class="config-card"><legend>Google Maps</legend><label>API key reference<input type="password" name="maps_api_secret_ref" placeholder="env:QASAWATCH_GOOGLE_MAPS_API_KEY"></label><p class="hint">One key can be restricted to both Geocoding API and Routes API.</p></fieldset>
+<details class="advanced wide"><summary>Advanced JSON controls</summary><p>Optional power-user controls for bulk edits, unusual SCB mappings, and future fields. The normal controls above take precedence.</p><div class="form-grid">
+<label>Filters JSON<textarea name="filters_json">{{ config.filters | tojson }}</textarea></label>
+<label>Sheets JSON<textarea name="sheets_json">{{ config.sheets | tojson }}</textarea></label>
+<label>Discord JSON<textarea name="discord_json">{{ config.discord | tojson }}</textarea></label>
+<label>Email JSON<textarea name="email_json">{{ config.email | tojson }}</textarea></label>
+<label>SCB path/mapping JSON<textarea name="scb_json">{{ config.scb | tojson }}</textarea></label>
+</div></details>
+<button class="primary wide">Save configuration</button></form><p>Credential values and references are never redisplayed. Status only: Maps {{ config.maps_secret_configured }}, Sheets {{ config.sheets.secret_configured }}, Discord {{ config.discord.secret_configured }}, SMTP {{ config.email.secret_configured }}.</p></section>
 <section><h2>Email</h2><p>{{ 'Enabled' if email.enabled else 'Disabled' }} · Recipients: {{ email.recipients | join(', ') or 'none' }} · Pending/retry/review: {{ email.pending }} · Latest batch: {{ email.latest or 'none' }} · Latest test: {{ email.latest_test or 'none' }}</p><form method="post" action="/test-email"><input type="email" name="recipient" placeholder="optional override recipient"><button>Send test email</button></form>{% for batch in email.batches %}<p>Batch #{{ batch.id }} · {{ batch.state }} · {{ batch.recipients | join(', ') }} · attempts {{ batch.attempts }}{% if batch.state in ['pending', 'retryable'] %} <form method="post" action="/api/email-batches/{{ batch.id }}/retry"><button>Retry batch</button></form>{% endif %}{% if batch.state == 'manual_review' %} · SMTP outcome is ambiguous: verify externally. <form method="post" action="/api/email-batches/{{ batch.id }}/resolve?delivered=true"><button>Mark delivered</button></form><form method="post" action="/api/email-batches/{{ batch.id }}/resolve?delivered=false"><button>Mark not delivered / retryable</button></form>{% endif %}</p>{% endfor %}</section>
 <section><h2>Recent runs</h2><table><tr><th>ID</th><th>Status</th><th>Started</th><th>Stats</th><th>Error</th></tr>{% for run in runs %}<tr><td>{{ run.id }}</td><td>{{ run.status }}</td><td>{{ run.started_at }}</td><td>{{ run.stats }}</td><td>{{ run.error or '' }}</td></tr>{% endfor %}</table></section>
 <section><h2>Recent listings and output states</h2>{% for item in listings %}<article><a href="{{ item.url }}">{{ item.data.get('address', item.external_id or item.id) }}</a> · {{ item.stage }} · {% for d in item.deliveries %}{{ d.channel }}={{ d.state }} {% if d.state == 'manual_review' %}<form method="post" action="/api/listings/{{ item.id }}/deliveries/{{ d.channel }}/resolve?delivered=true"><button>Mark delivered</button></form><form method="post" action="/api/listings/{{ item.id }}/deliveries/{{ d.channel }}/resolve?delivered=false"><button>Mark not delivered</button></form>{% endif %}{% endfor %}{% if item.rejection_reasons %}<pre>{{ item.rejection_reasons | tojson }}</pre>{% endif %}</article>{% endfor %}</section>

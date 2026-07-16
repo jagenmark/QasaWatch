@@ -61,7 +61,7 @@ If Chrome crashes, the host only replaces a process it can prove it owns by PID,
 
 ## Configuration and secrets
 
-[config.example.json](config.example.json) is the JSON shape accepted by `PUT /api/config`; it is not auto-loaded from disk. The dashboard stores the same configuration in SQLite. An enabled watcher requires at least one commute destination; a second destination is optional.
+[config.example.json](config.example.json) is the JSON shape accepted by `PUT /api/config`; it is not auto-loaded from disk. The dashboard stores the same configuration in SQLite and provides ordinary controls for filters, outputs, email, and SCB. Raw JSON remains available in a collapsed advanced section for bulk or unusual configuration. An enabled watcher requires at least one commute destination; a second destination is optional.
 
 Bootstrap database/log settings are read directly from environment. Integration secrets are stored as `env:VARIABLE_NAME` references and resolved only in the running process. See [`.env.example`](.env.example); protect the real environment file with `0600` permissions. The public API/dashboard redact secret references and SMTP username.
 
@@ -87,7 +87,9 @@ sudo systemctl stop qasawatch
 
 ## Manual review and safe output testing
 
-`POST /api/manual` accepts one Qasa detail URL, records its review, and sends no output. Promotion and retry require an explicit channel list. Safe mode blocks watcher delivery, production promotion/retry, grouped-batch resend, and test email. After safe mode is disabled, an explicit promotion/retry can deliberately override the safe-scan tombstone for only the selected channels.
+`POST /api/manual` accepts one Qasa detail URL, records its review, and sends no output. Promotion and retry require an explicit channel list. Safe mode blocks watcher delivery, production promotion/retry, grouped-batch resend, and test email. Watcher scans in safe mode are true dry runs: they parse, enrich, filter, and report counts without adding listings to watcher deduplication or creating delivery records. Listings first seen in safe mode therefore remain new for a later production scan.
+
+Discord and email summaries include furnished/unfurnished status when Qasa exposes it, the rental period, and a separate move-in date. Open-ended rentals are labelled `Tillsvidare`.
 
 For a no-production-output E2E check, set `enabled: false`, `safe_mode: true`, and leave `maps_api_secret_ref` and `scb.data_path` empty if no enrichment calls are wanted. Use `/api/manual` or `/api/run-now`, review the dashboard/database, then configure controlled outputs before turning safe mode off.
 

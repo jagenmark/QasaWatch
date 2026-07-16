@@ -163,3 +163,123 @@ async def test_invalid_advanced_json_returns_readable_dashboard_error(tmp_path):
     assert "advanced JSON" in response.text
     assert (await service.get_config()).qasa_results_url == "https://qasa.com/se/sv/find-home"
     await db.dispose()
+
+
+async def test_normal_provider_and_filter_controls_save_without_editing_json(tmp_path):
+    db = Database(tmp_path / "friendly-form.db")
+    await db.initialize()
+    service = AppService(db, NoBrowser(), Pipeline(db))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service)), base_url="http://test"
+    ) as client:
+        dashboard = await client.get("/")
+        response = await client.post("/config", data={
+            "qasa_results_url": "https://qasa.com/se/sv/find-home",
+            "filter_maximum_rent": "10300",
+            "filter_minimum_area": "25",
+            "filter_allowed_locations": "Solna\nSundbyberg",
+            "sheets_enabled": "true",
+            "sheets_spreadsheet_id": "sheet-123",
+            "sheets_worksheet": "Apartments",
+            "discord_enabled": "true",
+            "email_enabled": "true",
+            "email_recipients": "one@example.com, two@example.com",
+            "email_sender": "watcher@example.com",
+            "email_smtp_host": "smtp.example.com",
+            "email_smtp_port": "587",
+            "email_smtp_mode": "starttls",
+            "email_delivery_mode": "per_listing",
+            "email_subject": "Qasa: {count}",
+            "scb_data_path": "data/scb/sweden.geojson",
+            "scb_id_column": "deso_id",
+            "scb_name_column": "deso_name",
+            "scb_vintage": "2025",
+            "scb_crs": "EPSG:4326",
+        })
+
+    assert response.status_code == 303
+    assert "<summary>Advanced JSON controls</summary>" in dashboard.text
+    assert 'name="email_recipients"' in dashboard.text
+    assert 'name="sheets_spreadsheet_id"' in dashboard.text
+    saved = await service.get_config()
+    assert saved.filters.maximum_rent == 10300
+    assert saved.filters.minimum_area == 25
+    assert saved.filters.allowed_locations == ["Solna", "Sundbyberg"]
+    assert saved.sheets.enabled and saved.sheets.spreadsheet_id == "sheet-123"
+    assert saved.discord.enabled
+    assert saved.email.enabled
+    assert saved.email.recipients == ["one@example.com", "two@example.com"]
+    assert saved.email.per_listing and not saved.email.grouped
+    assert saved.scb.data_path == "data/scb/sweden.geojson"
+    assert saved.scb.id_column == "deso_id"
+    await db.dispose()
+
+
+async def test_dashboard_test_email_action_shows_result_without_exposing_secret(tmp_path):
+    db = Database(tmp_path / "test-email-form.db")
+    await db.initialize()
+    calls = []
+
+    async def email_tester(recipient):
+        calls.append(recipient)
+        return {"test": True}
+
+    service = AppService(
+        db,
+        NoBrowser(),
+        Pipeline(db),
+        email_tester=email_tester,
+    )
+    await service.save_config(WatcherConfig(
+        safe_mode=False,
+        email={
+            "enabled": True,
+            "recipients": ["saved@example.com"],
+            "sender": "watcher@example.com",
+            "smtp_host": "smtp.example.com",
+            "smtp_secret_ref": "env:QASAWATCH_SMTP_PASSWORD",
+        },
+    ))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service)),
+        base_url="http://test",
+        follow_redirects=True,
+    ) as client:
+        response = await client.post(
+            "/test-email",
+            data={"recipient": "override@example.com"},
+        )
+
+    assert response.status_code == 200
+    assert calls == ["override@example.com"]
+    assert "succeeded" in response.text
+    assert 'value="env:QASAWATCH_SMTP_PASSWORD"' not in response.text
+    await db.dispose()
+
+
+async def test_dashboard_can_clear_redacted_smtp_username(tmp_path):
+    db = Database(tmp_path / "clear-smtp-user.db")
+    await db.initialize()
+    service = AppService(db, NoBrowser(), Pipeline(db))
+    await service.save_config(WatcherConfig(email={
+        "smtp_username": "old@example.com",
+    }))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(service)), base_url="http://test"
+    ) as client:
+        response = await client.post("/config", data={
+            "qasa_results_url": "https://qasa.com/se/sv/find-home",
+            "email_sender": "new@example.com",
+            "email_smtp_host": "smtp.example.com",
+            "email_smtp_port": "587",
+            "email_smtp_mode": "starttls",
+            "email_delivery_mode": "grouped",
+            "email_clear_smtp_username": "true",
+        })
+
+    assert response.status_code == 303
+    assert (await service.get_config()).email.smtp_username is None
+    await db.dispose()

@@ -247,6 +247,12 @@ def _candidate(mapping: Mapping[str, Any], base_url: str, source: str) -> Parsed
     for key, keys in attribute_aliases.items():
         value = _first(mapping, *keys)
         if value is not None:
+            if key == "furnished" and isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized in {"true", "yes", "1", "furnished", "möblerat"}:
+                    value = True
+                elif normalized in {"false", "no", "0", "unfurnished", "omöblerat"}:
+                    value = False
             listing.attributes[key] = value
             listing.provenance[key] = source
     if listing.availability is None and listing.rental_start:
@@ -408,26 +414,51 @@ def _fill_detail_text(listing: ParsedListing, text: str, title: str) -> None:
             listing.provenance["address"] = "document-title"
 
     period = re.search(
-        r"(?:Hyresperiod|Rental period)\s+(\d{4}-\d{2}-\d{2})\s+(\d{4}-\d{2}-\d{2})",
+        r"(?:Hyresperiod|Rental period)\s+"
+        r"(?:(\d{4}-\d{2}-\d{2})\s+)?"
+        r"(?:[-–—]\s*)?"
+        r"(\d{4}-\d{2}-\d{2}|Tillsvidare|Until further notice)",
         text,
         re.I,
     )
     if period:
-        if listing.rental_start is None:
+        if listing.rental_start is None and period.group(1):
             listing.rental_start = period.group(1)
             listing.provenance["rental_start"] = "semantic-text"
-        if listing.rental_end is None:
+        open_ended = period.group(2).lower() in {
+            "tillsvidare",
+            "until further notice",
+        }
+        if listing.rental_end is None and not open_ended:
             listing.rental_end = period.group(2)
             listing.provenance["rental_end"] = "semantic-text"
-        if listing.duration is None:
+        if open_ended and listing.availability is None:
+            listing.availability = "until_further_notice"
+            listing.provenance["availability"] = "semantic-text"
+        if listing.duration is None and period.group(1) and not open_ended:
             try:
                 days = (date.fromisoformat(period.group(2)) - date.fromisoformat(period.group(1))).days
                 listing.duration = f"{days} days"
                 listing.provenance["duration"] = "derived"
             except ValueError:
                 pass
-    if "Möblerat" in text or re.search(r"\bFurnished\b", text, re.I):
-        listing.attributes.setdefault("furnished", True)
+
+    move_in = re.search(
+        r"(?:Inflyttningsdatum|Move-in date|Available from)\s+(\d{4}-\d{2}-\d{2})",
+        text,
+        re.I,
+    )
+    if move_in and listing.rental_start is None:
+        listing.rental_start = move_in.group(1)
+        listing.provenance["rental_start"] = "semantic-text"
+
+    furnished: bool | None = None
+    if re.search(r"\b(?:Omöblerat|Unfurnished)\b", text, re.I):
+        furnished = False
+    elif re.search(r"\b(?:Möblerat|Furnished)\b", text, re.I):
+        furnished = True
+    if furnished is not None and "furnished" not in listing.attributes:
+        listing.attributes["furnished"] = furnished
         listing.provenance.setdefault("furnished", "semantic-text")
     if "Möjlighet till förlängning" in text:
         listing.availability = listing.availability or "extension_possible"

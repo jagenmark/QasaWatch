@@ -42,11 +42,13 @@ def test_key_stable():
 
 def test_rich_summary():
     value = listing()
-    rich = ListingSnapshot(value.id, value.provider, value.url, value.external_id, value.stage, {**value.data, "rooms": 2.0, "area": 48.0, "latitude": 59.3, "longitude": 18.0, "rental_start": "2026-08-22T00:00:00+00:00", "rental_end": "2027-04-30T00:00:00+00:00", "duration": "251 days", "availability": "available", "published_at": "2026-01-01", "commutes": {"work": {"duration_seconds": 600}}, "demographics": {"population": 42}, "filter_result": {"status": "accepted"}}, value.discovered_at)
+    rich = ListingSnapshot(value.id, value.provider, value.url, value.external_id, value.stage, {**value.data, "rooms": 2.0, "area": 48.0, "latitude": 59.3, "longitude": 18.0, "rental_start": "2026-08-22T00:00:00+00:00", "rental_end": "2027-04-30T00:00:00+00:00", "furnished": False, "duration": "251 days", "availability": "available", "published_at": "2026-01-01", "commutes": {"work": {"duration_seconds": 600}}, "demographics": {"population": 42}, "filter_result": {"status": "accepted"}}, value.discovered_at)
     summary = listing_summary(rich)
     assert summary["commute"] == "work: 10 min" and "population: 42" in summary["demographics"] and summary["filter"] == "accepted"
     assert summary["coordinates"] == "59.3, 18.0"
     assert summary["rental_period"] == "2026-08-22 → 2027-04-30"
+    assert summary["move_in_date"] == "2026-08-22"
+    assert summary["furnished"] == "Unfurnished"
     assert summary["rooms"] == "2" and summary["area"] == "48"
 
 
@@ -66,6 +68,7 @@ async def test_discord_formats_swedish_listing_with_separate_enrichment_bullets(
             "area": 48,
             "rental_start": "2026-08-22",
             "rental_end": "2027-04-30",
+            "furnished": True,
             "commutes": {
                 "arbete": {"duration_seconds": 600},
                 "skola": {"status": "api_failure"},
@@ -97,7 +100,9 @@ async def test_discord_formats_swedish_listing_with_separate_enrichment_bullets(
             "Kvm: 48 m²\n"
             "Plats/adress: Sveavägen 1, Stockholm\n"
             "Rum: 2\n"
-            "Uthyrningsperiod: 2026-08-22 → 2027-04-30\n\n"
+            "Möblerat: Möblerat\n"
+            "Uthyrningsperiod: 2026-08-22 → 2027-04-30\n"
+            "Inflyttningsdatum: 2026-08-22\n\n"
             "Pendling:\n"
             "- arbete: 10 min\n"
             "- skola: api_failure\n"
@@ -124,6 +129,7 @@ async def test_discord_omits_missing_fields_and_handles_open_ended_period_safely
         value.stage,
         {
             "rental_start": "2026-08-22",
+            "availability": "until_further_notice",
             "demographics": {"notis": "@here", "saknas": None},
         },
         value.discovered_at,
@@ -134,13 +140,32 @@ async def test_discord_omits_missing_fields_and_handles_open_ended_period_safely
         sparse, idempotency_key="key"
     )
 
-    assert "Uthyrningsperiod: 2026-08-22 - Tillsvidare" in client.payload["content"]
+    assert "Uthyrningsperiod: Tillsvidare" in client.payload["content"]
+    assert "Inflyttningsdatum: 2026-08-22" in client.payload["content"]
     assert "Hyra:" not in client.payload["content"]
     assert "Pendling:" not in client.payload["content"]
     assert "- Notis: @here" in client.payload["content"]
     assert "saknas" not in client.payload["content"]
     assert len(client.payload["content"]) <= 1900
     assert client.payload["allowed_mentions"] == {"parse": []}
+
+
+def test_start_only_listing_is_not_claimed_to_be_open_ended_without_evidence():
+    value = listing()
+    partial = ListingSnapshot(
+        value.id,
+        value.provider,
+        value.url,
+        value.external_id,
+        value.stage,
+        {"rental_start": "2026-08-22", "availability": "available"},
+        value.discovered_at,
+    )
+
+    summary = listing_summary(partial)
+
+    assert summary["move_in_date"] == "2026-08-22"
+    assert summary["rental_period"] == ""
 
 
 @pytest.mark.asyncio

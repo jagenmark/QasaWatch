@@ -126,6 +126,7 @@ def test_qasa_home_search_ignores_nested_location_and_upload_ids():
     assert listing.rental_start == "2026-07-15T00:00:00+00:00"
     assert listing.availability == "until_further_notice"
     assert listing.attributes["base_rent"] == 8900
+    assert listing.attributes["furnished"] is False
     assert listing.attributes["pets_allowed"] is True
 
 
@@ -225,6 +226,55 @@ def test_detail_semantic_fallback_extracts_period_total_rent_and_duration():
     assert listing.attributes["base_rent"] == 9_500
     assert listing.duration == "251 days"
     assert listing.availability == "extension_possible"
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [
+        ("Möblerat", True),
+        ("Furnished", True),
+        ("Omöblerat", False),
+        ("Unfurnished", False),
+    ],
+)
+def test_detail_semantic_fallback_distinguishes_furnished_status(label, expected):
+    page = parse_qasa_html(
+        f'<a href="/home/1">Annons</a> Bostaden hyrs ut {label}',
+        base_url="https://qasa.com/se/sv/home/1",
+    )
+
+    assert page.listings[0].attributes["furnished"] is expected
+
+
+def test_detail_semantic_fallback_extracts_open_period_and_move_in_date():
+    page = parse_qasa_html(
+        """
+        <a href="/home/1">Annons</a>
+        Hyresperiod Tillsvidare
+        Inflyttningsdatum 2026-08-22
+        """,
+        base_url="https://qasa.com/se/sv/home/1",
+    )
+    listing = page.listings[0]
+
+    assert listing.availability == "until_further_notice"
+    assert listing.rental_start == "2026-08-22"
+    assert listing.rental_end is None
+
+
+@pytest.mark.parametrize("separator", ["-", "–", "—"])
+def test_detail_semantic_fallback_accepts_period_dash_separators(separator):
+    page = parse_qasa_html(
+        f"""
+        <a href="/home/1">Annons</a>
+        Hyresperiod 2026-08-22 {separator} 2027-04-30
+        """,
+        base_url="https://qasa.com/se/sv/home/1",
+    )
+    listing = page.listings[0]
+
+    assert listing.rental_start == "2026-08-22"
+    assert listing.rental_end == "2027-04-30"
 
 
 @pytest.mark.parametrize(

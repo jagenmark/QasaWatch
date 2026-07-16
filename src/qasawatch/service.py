@@ -7,7 +7,6 @@ from typing import Any, Iterable
 from urllib.parse import urlparse
 
 from sqlalchemy import select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import selectinload
 
 from .browser import QasaBrowser
@@ -55,7 +54,7 @@ class AppService:
         run_id = await runtime.start_run(owner=owner)
         finish_pipeline = runtime
         processed = failures = new = accepted = rejected = 0
-        output_state: Any = "blocked_safe_mode" if config.safe_mode else "recorded_per_listing"
+        output_state: Any = "dry_run_no_outputs" if config.safe_mode else "recorded_per_listing"
         found = 0
         fatal: BaseException | None = None
         try:
@@ -72,26 +71,50 @@ class AppService:
             found = len(scan.parsed.listings)
             effective = self._pipeline_for_channels((), pipeline=runtime) if config.safe_mode else runtime
             finish_pipeline = effective
-            options = ProcessingOptions(deliver=not config.safe_mode, raise_errors=False)
+            options = ProcessingOptions(deliver=True, raise_errors=False)
             for parsed in scan.parsed.listings:
                 try:
-                    result = await effective.process(parsed.to_raw_listing(), run_id=run_id, options=options)
+                    if config.safe_mode:
+                        result = await effective.process_manual(
+                            parsed.to_raw_listing(),
+                            options=ProcessingOptions(
+                                deliver=False,
+                                record_watcher_history=False,
+                                count_stats=False,
+                                record_manual_history=False,
+                                raise_errors=False,
+                                use_enrichment_cache=True,
+                            ),
+                        )
+                    else:
+                        result = await effective.process(
+                            parsed.to_raw_listing(), run_id=run_id, options=options
+                        )
                     processed += 1
-                    new += int(not result.duplicate)
-                    accepted += int(not result.duplicate and result.stage is ListingStage.ACCEPTED)
-                    rejected += int(not result.duplicate and result.stage is ListingStage.REJECTED)
+                    # A safe scan is a dry run: candidates remain genuinely new
+                    # for the first production scan after safe mode is disabled.
+                    new += int(config.safe_mode or not result.duplicate)
+                    accepted += int(
+                        (config.safe_mode or not result.duplicate)
+                        and result.stage is ListingStage.ACCEPTED
+                    )
+                    rejected += int(
+                        (config.safe_mode or not result.duplicate)
+                        and result.stage is ListingStage.REJECTED
+                    )
                     failures += len(result.delivery_failures)
                     if result.stage not in (ListingStage.ACCEPTED, ListingStage.REJECTED):
                         failures += 1
-                    if (
-                        config.safe_mode
-                        and result.stage is ListingStage.ACCEPTED
-                        and result.listing_id is not None
-                    ):
-                        await self._mark_safe_outputs_skipped(result.listing_id)
-                except Exception:
+                except Exception as exc:
                     failures += 1
-                    # Pipeline records stage errors. A malformed individual must not abort a scan.
+                    if config.safe_mode:
+                        await effective.record_run_error(
+                            run_id,
+                            f"safe_processing:{parsed.external_id or 'unknown'}",
+                            exc,
+                        )
+                    # Production pipeline records stage errors. A malformed
+                    # individual must not abort a scan.
                     continue
         except BaseException as exc:
             fatal = exc
@@ -271,32 +294,6 @@ class AppService:
                 )
             outputs.append(provider)
         return Pipeline(self.database, enricher=source.enricher, filters=source.filters, outputs=outputs, enrichment_cache_ttl=source.enrichment_cache_ttl)
-
-    async def _mark_safe_outputs_skipped(self, listing_id: int) -> None:
-        # Tombstone every per-listing channel, even if currently disabled. This
-        # ensures later configuration changes cannot backfill safe-mode results.
-        channels = (
-            DeliveryChannel.SHEETS,
-            DeliveryChannel.DISCORD,
-            DeliveryChannel.EMAIL,
-        )
-        async with self.database.sessions.begin() as session:
-            for channel in channels:
-                await session.execute(
-                    sqlite_insert(ListingDelivery)
-                    .values(
-                        listing_id=listing_id,
-                        channel=channel.value,
-                        state="skipped",
-                        last_error="suppressed by safe verification mode",
-                    )
-                    .on_conflict_do_nothing(
-                        index_elements=[
-                            ListingDelivery.listing_id,
-                            ListingDelivery.channel,
-                        ]
-                    )
-                )
 
     async def dashboard(self) -> dict[str, Any]:
         async with self.database.sessions() as session:

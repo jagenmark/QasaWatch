@@ -50,6 +50,29 @@ def test_invalid_config_and_redacted_credentials():
     assert "topsecret" not in repr(config) and "username='user'" not in repr(config)
 
 
+def test_email_includes_furnished_period_and_separate_move_in_date():
+    value = listing()
+    rich = ListingSnapshot(
+        value.id,
+        value.provider,
+        value.url,
+        value.external_id,
+        value.stage,
+        {
+            **value.data,
+            "furnished": False,
+            "rental_start": "2026-08-22T00:00:00+00:00",
+            "availability": "until_further_notice",
+        },
+        value.discovered_at,
+    )
+
+    body = format_scan_email([rich])[1]
+    assert "Furnished: Unfurnished" in body
+    assert "Rental period: Tillsvidare" in body
+    assert "Move-in date: 2026-08-22" in body
+
+
 @pytest.mark.asyncio
 async def test_durable_batch_retry_and_ambiguous_manual_review(tmp_path):
     db = Database(tmp_path / "email.db"); await db.initialize()

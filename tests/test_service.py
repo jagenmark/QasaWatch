@@ -5,10 +5,18 @@ from sqlalchemy import func, select
 
 from qasawatch.browser import BrowserScan
 from qasawatch.db import Database
-from qasawatch.domain import DeliveryChannel, DeliveryResult, RawListing
+from qasawatch.domain import DeliveryChannel, DeliveryResult, EnrichedListing, RawListing
 from qasawatch.emailer import EmailMode, EmailOutput
 from qasawatch.filters import FilterChain, NumericRangeFilter
-from qasawatch.models import Listing, ListingDelivery, ManualProcessing, Run
+from qasawatch.models import (
+    EmailBatch,
+    Listing,
+    ListingDelivery,
+    ManualProcessing,
+    ProcessingError,
+    Run,
+    RunListing,
+)
 from qasawatch.parser import ParsedListing, ParsedPage
 from qasawatch.pipeline import Pipeline
 from qasawatch.readiness import ReadinessResult, ReadinessState
@@ -42,6 +50,29 @@ class MailSender:
     async def send(self, recipients, subject, body):
         self.calls.append((tuple(recipients), subject, body))
         return "mail-1"
+
+
+class CountingEnricher:
+    name = "counting"
+
+    def __init__(self):
+        self.calls = 0
+
+    async def enrich(self, raw):
+        self.calls += 1
+        return EnrichedListing(
+            raw.provider,
+            raw.url,
+            raw.external_id,
+            {**raw.data, "coordinates": {"latitude": 59.3, "longitude": 18.0}},
+        )
+
+
+class FailingEnricher:
+    name = "failing"
+
+    async def enrich(self, raw):
+        raise RuntimeError("bad maps key")
 
 
 @pytest.fixture
@@ -128,22 +159,32 @@ async def test_manual_expired_page_does_not_process_recommended_listing(database
         await service.process_manual("https://qasa.com/home/expired")
 
 
-async def test_safe_scan_does_not_backfill_outputs_when_production_is_enabled(database):
+async def test_safe_scan_is_dry_run_and_production_scan_delivers(database):
     output = Output()
     service = AppService(database, FakeBrowser(), Pipeline(database, outputs=[output]))
     await service.save_config(
         WatcherConfig(safe_mode=True, discord={"enabled": True})
     )
-    await service.run_watcher(reason="manual-run-now")
+    safe_result = await service.run_watcher(reason="manual-run-now")
+    assert safe_result["new"] == 1
+    assert safe_result["accepted"] == 1
+    assert safe_result["outputs"] == "dry_run_no_outputs"
+    assert output.calls == []
+    async with database.sessions() as session:
+        assert await session.scalar(select(func.count(Listing.id))) == 0
+        assert await session.scalar(select(func.count(ListingDelivery.id))) == 0
+        assert await session.scalar(select(func.count(ManualProcessing.id))) == 0
+        assert await session.scalar(select(func.count(RunListing.id))) == 0
     await service.save_config(
         WatcherConfig(safe_mode=False, discord={"enabled": True})
     )
     result = await service.run_watcher(reason="manual-run-now")
-    assert result["new"] == 0
-    assert output.calls == []
+    assert result["new"] == 1
+    assert len(output.calls) == 1
     async with database.sessions() as session:
+        assert await session.scalar(select(func.count(Listing.id))) == 1
         delivery = await session.scalar(select(ListingDelivery))
-        assert delivery.state == "skipped"
+        assert delivery.state == "succeeded"
 
 
 async def test_watcher_explicitly_uses_strict_results_mode_for_any_qasa_route(database):
@@ -161,15 +202,115 @@ async def test_watcher_explicitly_uses_strict_results_mode_for_any_qasa_route(da
     assert browser.scan_modes == [True]
 
 
-async def test_safe_scan_tombstones_channels_enabled_only_later(database):
+async def test_safe_scan_does_not_poison_dedup_when_channel_is_enabled_later(database):
     output = Output()
     service = AppService(database, FakeBrowser(), Pipeline(database, outputs=[output]))
     await service.save_config(WatcherConfig(safe_mode=True))
-    await service.run_watcher(reason="manual-run-now")
+    first_safe = await service.run_watcher(reason="manual-run-now")
+    assert first_safe["new"] == 1
     await service.save_config(
         WatcherConfig(safe_mode=True, discord={"enabled": True})
     )
+    second_safe = await service.run_watcher(reason="manual-run-now")
+    assert second_safe["new"] == 1
+    async with database.sessions() as session:
+        assert await session.scalar(select(func.count(Listing.id))) == 0
+        assert await session.scalar(select(func.count(ListingDelivery.id))) == 0
+    await service.save_config(
+        WatcherConfig(safe_mode=False, discord={"enabled": True})
+    )
+
+    result = await service.run_watcher(reason="manual-run-now")
+
+    assert result["new"] == 1
+    assert len(output.calls) == 1
+
+
+async def test_repeated_safe_scans_reuse_enrichment_cache_without_dedup(database):
+    enricher = CountingEnricher()
+    service = AppService(
+        database,
+        FakeBrowser(),
+        Pipeline(database, enricher=enricher),
+    )
+    await service.save_config(WatcherConfig(safe_mode=True))
+
+    first = await service.run_watcher(reason="manual-run-now")
+    second = await service.run_watcher(reason="manual-run-now")
+
+    assert first["new"] == second["new"] == 1
+    assert enricher.calls == 1
+    async with database.sessions() as session:
+        assert await session.scalar(select(func.count(Listing.id))) == 0
+        assert await session.scalar(select(func.count(ListingDelivery.id))) == 0
+
+
+async def test_safe_scan_records_diagnostic_without_creating_listing_state(database):
+    service = AppService(
+        database,
+        FakeBrowser(),
+        Pipeline(database, enricher=FailingEnricher()),
+    )
+    await service.save_config(WatcherConfig(safe_mode=True))
+
+    result = await service.run_watcher(reason="manual-run-now")
+
+    assert result["failures"] == 1
+    async with database.sessions() as session:
+        error = await session.scalar(select(ProcessingError))
+        assert error.operation == "safe_processing:manual-1"
+        assert error.message == "bad maps key"
+        assert await session.scalar(select(func.count(Listing.id))) == 0
+        assert await session.scalar(select(func.count(RunListing.id))) == 0
+
+
+async def test_safe_grouped_email_creates_no_batch_then_production_sends_once(database):
+    sender = MailSender()
+    grouped = EmailOutput(
+        sender,
+        ["reviewer@example.test"],
+        mode=EmailMode.PER_SCAN,
+    )
+    service = AppService(database, FakeBrowser(), Pipeline(database, outputs=[grouped]))
+    await service.save_config(WatcherConfig(safe_mode=True, email={"enabled": True}))
+
     await service.run_watcher(reason="manual-run-now")
+
+    assert sender.calls == []
+    async with database.sessions() as session:
+        assert await session.scalar(select(func.count(EmailBatch.id))) == 0
+        assert await session.scalar(select(func.count(Listing.id))) == 0
+
+    await service.save_config(WatcherConfig(safe_mode=False, email={"enabled": True}))
+    result = await service.run_watcher(reason="manual-run-now")
+
+    assert result["new"] == 1
+    assert len(sender.calls) == 1
+    async with database.sessions() as session:
+        batch = await session.scalar(select(EmailBatch))
+        assert batch.state == "succeeded"
+
+
+async def test_legacy_safe_tombstone_is_not_automatically_requeued(database):
+    accepted = await Pipeline(database).process(
+        RawListing(
+            "qasa",
+            "https://qasa.com/se/sv/home/manual-1",
+            "manual-1",
+            {"rent": 9000, "address": "Test"},
+        )
+    )
+    async with database.sessions.begin() as session:
+        session.add(
+            ListingDelivery(
+                listing_id=accepted.listing_id,
+                channel="discord",
+                state="skipped",
+                last_error="suppressed by safe verification mode",
+            )
+        )
+    output = Output()
+    service = AppService(database, FakeBrowser(), Pipeline(database, outputs=[output]))
     await service.save_config(
         WatcherConfig(safe_mode=False, discord={"enabled": True})
     )
@@ -178,15 +319,20 @@ async def test_safe_scan_tombstones_channels_enabled_only_later(database):
 
     assert result["new"] == 0
     assert output.calls == []
+    async with database.sessions() as session:
+        delivery = await session.scalar(select(ListingDelivery))
+        assert delivery.state == "skipped"
 
 
-async def test_explicit_manual_promotion_overrides_safe_tombstone(database):
+async def test_explicit_manual_promotion_after_safe_dry_run_delivers(database):
     output = Output()
     service = AppService(database, FakeBrowser(), Pipeline(database, outputs=[output]))
     await service.save_config(
         WatcherConfig(safe_mode=True, discord={"enabled": True})
     )
     await service.run_watcher(reason="manual-run-now")
+    async with database.sessions() as session:
+        assert await session.scalar(select(func.count(Listing.id))) == 0
     await service.save_config(
         WatcherConfig(safe_mode=False, discord={"enabled": True})
     )

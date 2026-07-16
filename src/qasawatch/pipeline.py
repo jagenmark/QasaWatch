@@ -48,6 +48,7 @@ class ProcessingOptions:
     record_manual_history: bool = False
     raise_errors: bool = True
     allow_skipped_delivery: bool = False
+    use_enrichment_cache: bool = False
 
     @classmethod
     def manual(cls) -> "ProcessingOptions":
@@ -114,6 +115,13 @@ class Pipeline:
             run.error = self._error_message(final_error) if final_error else None
         if final_error is not None and error is None:
             raise final_error
+
+    async def record_run_error(
+        self, run_id: int, operation: str, error: BaseException
+    ) -> None:
+        """Persist a sanitized run-scoped error without creating listing state."""
+
+        await self._record_error(None, run_id, operation, error)
 
     def _is_grouped_email(self, channel: DeliveryChannel, provider: DeliveryProvider) -> bool:
         mode = getattr(provider, "mode", None)
@@ -201,7 +209,9 @@ class Pipeline:
                 history_id = history.id
         try:
             enriched = await self._enrich_raw(
-                raw, self.content_hash(raw.data), use_cache=False
+                raw,
+                self.content_hash(raw.data),
+                use_cache=opts.use_enrichment_cache,
             )
             decision = await self.filters.evaluate(enriched)
             stage = ListingStage.ACCEPTED if decision.accepted else ListingStage.REJECTED

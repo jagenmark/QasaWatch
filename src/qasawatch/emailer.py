@@ -142,7 +142,8 @@ def format_listing_email(listing: ListingSnapshot) -> tuple[str, str]:
     for label, key in (
         ("Address", "address"), ("Rent", "rent"), ("Rooms", "rooms"),
         ("Area", "area"), ("Coordinates", "coordinates"),
-        ("Rental period", "rental_period"), ("Duration", "duration"),
+        ("Furnished", "furnished"), ("Rental period", "rental_period"),
+        ("Move-in date", "move_in_date"), ("Duration", "duration"),
         ("Availability", "availability"),
     ):
         value = summary.get(key, data.get(key))
