@@ -148,15 +148,40 @@ class AppService:
         processed = failures = new = accepted = rejected = 0
         output_state: Any = "dry_run_no_outputs" if config.safe_mode else "recorded_per_listing"
         found = 0
+        scan = None
         fatal: BaseException | None = None
         try:
-            scan = await self.browser.scan(config.qasa_results_url, results_only=True)
+            known_listing_ids: set[str] = set()
+            if not config.safe_mode:
+                async with self.database.sessions() as session:
+                    known_listing_ids = {
+                        str(value)
+                        for value in (
+                            await session.scalars(
+                                select(Listing.external_id).where(
+                                    Listing.provider == "qasa",
+                                    Listing.external_id.is_not(None),
+                                )
+                            )
+                        ).all()
+                        if value
+                    }
+            scan = await self.browser.scan(
+                config.qasa_results_url,
+                results_only=True,
+                known_listing_ids=known_listing_ids,
+                max_pages=config.max_result_pages,
+                max_listings=config.max_result_listings,
+            )
             self.last_browser_state = {
                 "status": scan.readiness.state.value,
                 "url": scan.final_url,
                 "complete": scan.readiness.complete,
                 "checked_at": datetime.now(UTC).isoformat(),
                 "errors": list(scan.parsed.errors),
+                "pages_scanned": scan.pages_scanned,
+                "total_available": scan.total_available,
+                "truncated": scan.truncated,
             }
             if not scan.readiness.complete:
                 raise IncompletePageError(f"results page quarantined: {scan.readiness.state.value}")
@@ -215,6 +240,13 @@ class AppService:
             if run is not None:
                 run.stats = {
                     "found": found,
+                    "pages_scanned": scan.pages_scanned if scan is not None else 0,
+                    "total_available": (
+                        scan.total_available
+                        if scan is not None and scan.total_available is not None
+                        else 0
+                    ),
+                    "truncated": int(scan.truncated) if scan is not None else 0,
                     "processed": processed,
                     "new": new,
                     "accepted": accepted,
@@ -229,7 +261,8 @@ class AppService:
         await finish_pipeline.finish_run(run_id, error=run_error)
         if fatal:
             raise fatal
-        return {"status": "completed_with_failures" if failures else "succeeded", "run_id": run_id, "found": found, "new": new, "accepted": accepted, "rejected": rejected, "failures": failures, "outputs": output_state, "safe_mode": config.safe_mode}
+        assert scan is not None
+        return {"status": "completed_with_failures" if failures else "succeeded", "run_id": run_id, "found": found, "pages_scanned": scan.pages_scanned, "total_available": scan.total_available, "truncated": scan.truncated, "new": new, "accepted": accepted, "rejected": rejected, "failures": failures, "outputs": output_state, "safe_mode": config.safe_mode}
 
     async def process_manual(self, url: str, *, requested_by: str | None = None) -> tuple[int, ProcessingResult]:
         scan = await self.browser.scan(url, results_only=False)

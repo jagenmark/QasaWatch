@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from qasawatch.parser import parse_qasa_html
+from qasawatch.parser import latest_home_search_page, parse_qasa_html
 from qasawatch.readiness import PageSample, ReadinessState, classify_samples
 
 FIXTURES = Path(__file__).parent / "fixtures" / "qasa"
@@ -181,6 +181,50 @@ def test_results_mode_ignores_other_qasa_payloads_recommendations_and_dom_links(
     )
 
     assert [item.external_id for item in page.listings] == ["real-1"]
+
+
+def test_home_search_pagination_metadata_uses_latest_authoritative_response():
+    first = {
+        "__qasawatch_operation": "HomeSearch",
+        "payload": {
+            "data": {
+                "homeIndexSearch": {
+                    "documents": {
+                        "nodes": [
+                            {"__typename": "HomeDocument", "id": "one"},
+                            {"__typename": "SponsoredCard", "id": "ad"},
+                        ],
+                        "hasNextPage": True,
+                        "pagesCount": 36,
+                        "totalCount": 2085,
+                    }
+                }
+            }
+        },
+    }
+    second = {
+        "__qasawatch_operation": "HomeSearch",
+        "payload": {
+            "data": {
+                "homeIndexSearch": {
+                    "documents": {
+                        "nodes": [{"__typename": "HomeDocument", "id": "two"}],
+                        "hasNextPage": False,
+                        "pagesCount": 2,
+                        "totalCount": 60,
+                    }
+                }
+            }
+        },
+    }
+
+    info = latest_home_search_page([first, second])
+
+    assert info is not None
+    assert info.listing_ids == ("two",)
+    assert not info.has_next_page
+    assert info.pages_count == 2
+    assert info.total_count == 60
 
 
 def test_detail_fallback_targets_page_id_when_recommendations_are_present():

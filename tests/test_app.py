@@ -798,6 +798,8 @@ async def test_dashboard_formats_schedule_and_hides_coordination_details(tmp_pat
     assert "All times are shown in Europe/Stockholm." in response.text
     assert 'id="run-now-form"' in response.text
     assert 'id="run-result-dialog"' in response.text
+    assert 'id="run-result-total-available"' in response.text
+    assert 'id="run-result-pages-scanned"' in response.text
     assert 'src="/static/dashboard.js?v=20260716-8"' in response.text
     assert 'id="live-next-check"' in response.text
     assert 'id="live-system-details"' in response.text

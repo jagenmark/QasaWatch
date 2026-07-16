@@ -26,9 +26,28 @@ from qasawatch.service import AppService, IncompletePageError
 
 
 class FakeBrowser:
-    def __init__(self, rent=9000): self.rent = rent; self.scan_modes = []
-    async def scan(self, url, *, results_only=False):
+    def __init__(self, rent=9000):
+        self.rent = rent
+        self.scan_modes = []
+        self.scan_options = []
+
+    async def scan(
+        self,
+        url,
+        *,
+        results_only=False,
+        known_listing_ids=(),
+        max_pages=1,
+        max_listings=None,
+    ):
         self.scan_modes.append(results_only)
+        self.scan_options.append(
+            {
+                "known_listing_ids": set(known_listing_ids),
+                "max_pages": max_pages,
+                "max_listings": max_listings,
+            }
+        )
         item = ParsedListing(url=url, external_id="manual-1", rent=self.rent, address="Test")
         return BrowserScan(ParsedPage((item,)), ReadinessResult(ReadinessState.READY, "ok", ("manual-1",)), url)
 
@@ -327,6 +346,38 @@ async def test_watcher_explicitly_uses_strict_results_mode_for_any_qasa_route(da
     await service.run_watcher(reason="manual-run-now")
 
     assert browser.scan_modes == [True]
+    assert browser.scan_options == [
+        {
+            "known_listing_ids": set(),
+            "max_pages": 5,
+            "max_listings": 250,
+        }
+    ]
+
+
+async def test_production_watcher_passes_known_qasa_ids_and_pagination_caps(database):
+    await Pipeline(database).process(
+        RawListing("qasa", "https://qasa.com/home/known", "known", {"rent": 9000})
+    )
+    browser = FakeBrowser()
+    service = AppService(database, browser, Pipeline(database))
+    await service.save_config(
+        WatcherConfig(
+            safe_mode=False,
+            max_result_pages=7,
+            max_result_listings=400,
+        )
+    )
+
+    await service.run_watcher(reason="manual-run-now")
+
+    assert browser.scan_options == [
+        {
+            "known_listing_ids": {"known"},
+            "max_pages": 7,
+            "max_listings": 400,
+        }
+    ]
 
 
 async def test_safe_scan_does_not_poison_dedup_when_channel_is_enabled_later(database):

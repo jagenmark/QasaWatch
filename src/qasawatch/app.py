@@ -95,6 +95,7 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
     @app.post("/config")
     async def config_form(
         enabled: bool = Form(False), qasa_results_url: str = Form(...),
+        max_result_pages: int = Form(5), max_result_listings: int = Form(250),
         base_interval_minutes: int = Form(15), jitter_minutes: int = Form(3),
         destinations_json: str = Form("[]"), filters_json: str = Form("{}"),
         sheets_json: str = Form("{}"), discord_json: str = Form("{}"),
@@ -329,6 +330,8 @@ def create_app(service: AppService, *, start_scheduler: bool = False) -> FastAPI
                 })
             config = WatcherConfig(
                 enabled=enabled, qasa_results_url=qasa_results_url,
+                max_result_pages=max_result_pages,
+                max_result_listings=max_result_listings,
                 base_interval_minutes=base_interval_minutes, jitter_minutes=jitter_minutes,
                 destinations=destinations, filters=filters,
                 sheets=sheets, discord=discord, email=email, scb=scb, safe_mode=safe_mode,

@@ -128,6 +128,8 @@ class ScbSettings(BaseModel):
 class WatcherConfig(BaseModel):
     enabled: bool = False
     qasa_results_url: str = "https://qasa.com/se/sv/find-home"
+    max_result_pages: int = Field(5, ge=1, le=100)
+    max_result_listings: int = Field(250, ge=1, le=5000)
     base_interval_minutes: int = Field(15, ge=1, le=1440)
     jitter_minutes: int = Field(3, ge=0, le=120)
     destinations: list[Destination] = Field(default_factory=list)

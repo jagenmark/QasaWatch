@@ -253,6 +253,14 @@
               <span>Timing variation (minutes)</span>
               <input name="jitter_minutes" type="number" value="{{ config.jitter_minutes }}">
             </label>
+            <label>
+              <span>Maximum result pages</span>
+              <input name="max_result_pages" type="number" min="1" max="100" value="{{ config.max_result_pages }}">
+            </label>
+            <label>
+              <span>Maximum listings per check</span>
+              <input name="max_result_listings" type="number" min="1" max="5000" value="{{ config.max_result_listings }}">
+            </label>
           </div>
         </fieldset>
 
@@ -731,6 +739,8 @@
     </p>
     <dl class="result-grid" id="run-result-counts" hidden>
       <div><dt>Listings found</dt><dd id="run-result-found">0</dd></div>
+      <div><dt>Qasa total</dt><dd id="run-result-total-available">0</dd></div>
+      <div><dt>Pages checked</dt><dd id="run-result-pages-scanned">0</dd></div>
       <div><dt>New listings</dt><dd id="run-result-new">0</dd></div>
       <div><dt>Matched</dt><dd id="run-result-accepted">0</dd></div>
       <div><dt>Filtered out</dt><dd id="run-result-rejected">0</dd></div>
